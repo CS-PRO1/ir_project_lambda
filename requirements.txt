@@ -1,0 +1,10 @@
+ir_datasets
+nltk
+scikit-learn
+transformers
+torch # Or tensorflow if you prefer that backend for transformers
+faiss-cpu # For efficient similarity search with BERT embeddings
+numpy
+scipy
+tqdm
+torch

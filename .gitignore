@@ -1,0 +1,75 @@
+# Python specific ignores
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+*.exe
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.pth
+pip-wheel-metadata/
+
+# Environments
+.venv/
+venv
+venv/               # Ignore the venv folder as requested
+env/
+.env/
+
+# Editors and IDEs
+.vscode/            # VS Code specific files
+.idea/              # PyCharm / IntelliJ IDEA specific files
+*.sublime-project
+*.sublime-workspace
+.project
+.directory
+*.jsonl
+# Operating System Files
+.DS_Store           # macOS
+Thumbs.db           # Windows
+ehthumbs.db
+.Spotlight-V100
+.Trashes
+
+# Logs
+*.log
+*.log.*
+
+# Project-specific ignored files
+
+# --- Datasets ---
+# Ignore the entire dataset folders as requested.
+# Assumes your datasets are within 'data/antique_train/' and 'data/beir_webist_touche2020/'
+data/antique_train/
+data/beir_webist_touche2020/
+
+# --- Indexes and Embeddings ---
+# Ignore the entire 'indexes' directory as requested.
+# This covers all inverted indices and BERT embeddings (.json, .npy, .jsonl etc.)
+data/indexes/
+
+# Optional: If you want to keep the 'data' directory itself in the repo
+# but ignore its contents (except for .gitkeep if you add one)
+# # Uncomment the following if you need to manage the 'data' directory structure
+# # but not its large content.
+# data/*
+# !data/.gitkeep # Keep a .gitkeep file to ensure the empty directory is committed
