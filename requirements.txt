@@ -1,10 +1,14 @@
-ir_datasets
-nltk
-scikit-learn
-transformers
-torch # Or tensorflow if you prefer that backend for transformers
-faiss-cpu # For efficient similarity search with BERT embeddings
-numpy
-scipy
-tqdm
-torch
+fastapi                 # API framework
+uvicorn                 # Web server
+nltk                    # Text preprocessing
+numpy                   # Numerical operations
+scipy                   # Scientific computing
+tqdm                    # Progress bars
+transformers            # Hugging Face models
+sentence-transformers   # Sentence embeddings
+torch                   # Deep learning
+pyspellchecker          # Spell checker
+ir_datasets             # Dataset loading
+scikit-learn            # ML utilities
+faiss-cpu               # Fast similarity search
+matplotlib              # Plotting

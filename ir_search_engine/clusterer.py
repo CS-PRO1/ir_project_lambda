@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pickle
 import os
+import time
 
 class DocumentClusterer:
     def __init__(self, n_clusters=5, random_state=42, use_pca=False, pca_components=50):
@@ -42,11 +43,11 @@ class DocumentClusterer:
         print("Document clustering complete.")
 
         # Evaluate clustering (optional, for insights)
-        try:
-            silhouette_avg = silhouette_score(data_to_cluster, cluster_labels)
-            print(f"Silhouette Score: {silhouette_avg:.3f} (higher is better, typically between -1 and 1)")
-        except Exception as e:
-            print(f"Could not calculate Silhouette Score (requires >= 2 clusters and > n_samples): {e}")
+        # try:
+        #     silhouette_avg = silhouette_score(data_to_cluster, cluster_labels)
+        #     print(f"Silhouette Score: {silhouette_avg:.3f} (higher is better, typically between -1 and 1)")
+        # except Exception as e:
+        #     print(f"Could not calculate Silhouette Score (requires >= 2 clusters and > n_samples): {e}")
 
         return self.document_clusters
 
@@ -71,17 +72,36 @@ class DocumentClusterer:
 
     def save_clusterer(self, filepath):
         """Saves the clusterer model to a file."""
-        with open(filepath, 'wb') as f:
-            pickle.dump((self.kmeans_model, self.document_clusters, self.cluster_centroids, self.pca), f)
-        print(f"Clusterer saved to {filepath}")
-
+        print(f"  Attempting to save clusterer to {filepath}...")
+        start_time_save = time.time()
+        try:
+            with open(filepath, 'wb') as f:
+                start_time_dump = time.time()
+                pickle.dump((self.kmeans_model, self.document_clusters, self.cluster_centroids, self.pca), f)
+                print(f"  pickle.dump operation took {time.time() - start_time_dump:.2f} seconds.")
+            print(f"Clusterer saved to {filepath} in {time.time() - start_time_save:.2f} seconds.")
+            return True # Indicate successful save
+        except Exception as e:
+            print(f"Error saving clusterer to {filepath}: {e}")
+            # Optionally, remove incomplete file
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            return False # Indicate failed save
+    
     def load_clusterer(self, filepath):
         """Loads the clusterer model from a file."""
         if not os.path.exists(filepath):
             print(f"Clusterer file not found at {filepath}")
             return False
-        with open(filepath, 'rb') as f:
-            self.kmeans_model, self.document_clusters, self.cluster_centroids, self.pca = pickle.load(f)
-        print(f"Clusterer loaded from {filepath}")
-        return True
-
+        try:
+            with open(filepath, 'rb') as f:
+                self.kmeans_model, self.document_clusters, self.cluster_centroids, self.pca = pickle.load(f)
+            print(f"Clusterer loaded from {filepath}")
+            return True
+        except Exception as e:
+            print(f"Error loading clusterer from {filepath}: {e}. File might be corrupted.")
+            # Optionally, remove corrupted file
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            return False
+    

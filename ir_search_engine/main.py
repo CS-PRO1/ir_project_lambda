@@ -1,6 +1,6 @@
 import os
 import sys
-from collections import namedtuple, defaultdict # ADDED defaultdict here
+from collections import namedtuple, defaultdict
 import time
 from tqdm import tqdm # Import tqdm for progress bars
 
@@ -14,9 +14,10 @@ from indexer import InvertedIndex
 from retrieval_model import VectorSpaceModel
 from bert_retrieval import BERTRetrievalModel
 from hybrid_retrieval import HybridRanker
+from query_optimizer import QueryOptimizer # NEW: Import QueryOptimizer
 
 # Import evaluation functions
-from evaluator import evaluate_models # _prepare_qrels_for_eval is no longer imported here
+from evaluator import evaluate_models 
 
 # Import type hints
 from typing import Dict, List, Union
@@ -41,27 +42,21 @@ def load_or_build_inverted_index(dataset_name: str, docs: List[Document], prepro
             print(f"Inverted index loaded from {index_filepath}")
         except Exception as e:
             print(f"Error loading inverted index: {e}. Rebuilding...")
-            # If load fails (e.g., due to old format), fall through to build
             if os.path.exists(index_filepath):
-                os.remove(index_filepath) # Clean up problematic file
-            pass # Continue to build
+                os.remove(index_filepath)
+            pass
     
-    # Check if index is empty after load attempt or if file didn't exist/was removed
-    # Corrected: Changed index.doc_lengths to index.document_lengths and added hasattr check
     if not (hasattr(index, 'index') and index.index and len(index.index) > 0 and \
             hasattr(index, 'document_lengths') and index.document_lengths): 
         print(f"Inverted Index not found or empty for {dataset_name}. Building...")
-        # Preprocess documents for VSM (using lemmatization, no n-grams for base VSM)
         doc_texts_list = [doc.text for doc in docs]
         
         print("Preprocessing documents for TF-IDF...")
         preprocessed_docs_list = preprocessor.preprocess_documents(
             doc_texts_list, use_stemming=False, use_lemmatization=True, add_ngrams=False,
-            desc="Preprocessing documents" # desc for tqdm
+            desc="Preprocessing documents"
         )
         
-        # InvertedIndex expects {doc_id: preprocessed_text}
-        # Create a mapping from original doc_ids to preprocessed texts
         preprocessed_docs_dict = {
             docs[i].doc_id: preprocessed_docs_list[i] 
             for i in tqdm(range(len(docs)), desc="Mapping preprocessed docs")
@@ -77,9 +72,8 @@ def load_or_index_bert_embeddings(dataset_name: str, raw_documents_dict: Dict[Un
     """Loads existing BERT embeddings or generates them from scratch."""
     embeddings_filepath_base = os.path.join(INDEXES_DIR, f"{dataset_name}_bert_embeddings")
     
-    bert_model = BERTRetrievalModel() # Initialize model (downloads if not present)
+    bert_model = BERTRetrievalModel()
     
-    # Check for all necessary files for loading
     bert_embeddings_npy = f"{embeddings_filepath_base}.npy"
     bert_map_json = f"{embeddings_filepath_base}_map.json"
     bert_text_json = f"{embeddings_filepath_base}_text.json"
@@ -91,27 +85,22 @@ def load_or_index_bert_embeddings(dataset_name: str, raw_documents_dict: Dict[Un
         try:
             bert_model.load_embeddings(embeddings_filepath_base)
             print("BERT embeddings loaded.")
-            # Ensure documents_text is correctly set from loaded data or raw_documents_dict
-            # The load_embeddings method should set bert_model.documents_text from _text.json
-            # If not, or if _text.json was old/missing, use the fresh raw_documents_dict
-            if not bert_model.documents_text: # If documents_text wasn't populated by load
+            if not bert_model.documents_text:
                 bert_model.documents_text = raw_documents_dict
             print(f"BERT model ready with {len(bert_model.doc_id_map)} embeddings.")
             return bert_model
         except Exception as e:
             print(f"Error loading BERT embeddings: {e}. Rebuilding...")
-            # Clean up potentially corrupt/old files to force rebuild
             for f in [bert_embeddings_npy, bert_map_json, bert_text_json]:
                 if os.path.exists(f):
                     os.remove(f)
-            # Fall through to generate
+            pass
     
     print(f"BERT embeddings or associated files not found/corrupt for {dataset_name}. Generating...")
-    bert_model.index_documents(raw_documents_dict) # This method has its own tqdm
+    bert_model.index_documents(raw_documents_dict)
     bert_model.save_embeddings(embeddings_filepath_base)
     print(f"BERT embeddings generated and saved. BERT model ready with {len(bert_model.doc_id_map)} embeddings.")
     
-    # ENSURE documents_text is always populated from the fresh raw_documents_dict after indexing
     bert_model.documents_text = raw_documents_dict 
     
     return bert_model
@@ -143,13 +132,13 @@ def main():
             print("Invalid choice. Please enter 1 or 2.")
 
     print(f"\nLoading data for {selected_dataset_name}...")
-    docs, queries, qrels = None, None, None # Initialize to None
+    docs, queries, qrels = None, None, None
     if selected_dataset_name == 'antique_train':
         docs, queries, qrels = data_loader.load_antique_train()
     elif selected_dataset_name == 'beir_webist_touche2020':
         docs, queries, qrels = data_loader.load_beir_webist_touche2020()
     
-    if docs is None: # Should not happen with valid choice, but good for safety
+    if docs is None:
         print("Failed to load documents. Exiting.")
         return
 
@@ -158,30 +147,31 @@ def main():
     # --- Indexing and Embedding Generation ---
     print("\nPreparing retrieval models (this may take a while for the first run)...")
     
-    # Inverted Index for VSM
     inverted_index = load_or_build_inverted_index(selected_dataset_name, docs, preprocessor)
     vsm_model = VectorSpaceModel(inverted_index, preprocessor)
     print(f"VSM model ready with {vsm_model.total_documents} documents.")
 
-    # BERT Embeddings
     bert_model = load_or_index_bert_embeddings(selected_dataset_name, raw_documents_dict)
     print(f"BERT model ready with {len(bert_model.doc_id_map)} embeddings.")
 
-    # Hybrid Ranker
     hybrid_ranker = HybridRanker(inverted_index, preprocessor, bert_model)
     print("Hybrid Ranker ready.")
 
     current_dataset_info = DatasetInfo(
         name=selected_dataset_name,
-        docs=docs, # Raw docs list
-        queries=queries, # This is a list of Query objects
-        qrels=qrels, # This is a list of Qrel objects
+        docs=docs,
+        queries=queries,
+        qrels=qrels,
         inverted_index=inverted_index,
-        bert_embeddings=bert_model.document_embeddings_matrix, # Store matrix for reference
+        bert_embeddings=bert_model.document_embeddings_matrix,
         vsm_model=vsm_model,
         bert_model=bert_model,
         hybrid_model=hybrid_ranker
     )
+
+    # NEW: Initialize QueryOptimizer
+    query_optimizer = QueryOptimizer(preprocessor, vsm_model, bert_model)
+
 
     # --- Interactive Search Loop ---
     while True:
@@ -191,9 +181,10 @@ def main():
         print("3. Hybrid Search (TF-IDF + BERT)")
         print("4. Change Dataset")
         print("5. Run Evaluation") 
-        print("6. Exit") 
+        print("6. Exit")
+        print("7. Query Optimization (Pseudo-Relevance Feedback)") # NEW OPTION
         
-        model_choice = input("Select an option (1-6): ").strip()
+        model_choice = input("Select an option (1-7): ").strip()
 
         if model_choice == '6': 
             print("Exiting search engine. Goodbye!")
@@ -201,44 +192,123 @@ def main():
         
         if model_choice == '4':
             print("Changing dataset...")
-            # Recursively call main to allow dataset selection again
-            # This will re-initialize everything for the new dataset
             main() 
-            return # Exit current main call to prevent double loop
+            return
 
         if model_choice == '5': 
             if not current_dataset_info.queries or not current_dataset_info.qrels:
                 print("Cannot run evaluation: Queries or Qrels data not loaded for this dataset.")
                 continue
             
-            # Prepare models dictionary for evaluator
             models_to_evaluate = {
                 'TF-IDF': current_dataset_info.vsm_model,
                 'BERT': current_dataset_info.bert_model,
-                'Hybrid': current_dataset_info.hybrid_model # Pass the HybridRanker instance directly
+                'Hybrid': current_dataset_info.hybrid_model
             }
             
-            # Define k values for evaluation
-            eval_k_values = [1, 5, 10, 20] # Example k values
+            eval_k_values = [1, 5, 10, 20]
 
-            # FIX 1: Convert list of Query objects to a dictionary keyed by query ID
-            # ASSUMPTION: Query object has a 'query_id' attribute.
-            # If your data_loader.py defines Query as `namedtuple('Query', ['id', 'text'])`,
-            # then change `q.query_id` to `q.id` below.
             queries_for_eval = {q.query_id: q for q in current_dataset_info.queries} 
 
-            # FIX 2: Prepare qrels for evaluation: convert list of Qrel namedtuples to a dict of dicts
-            # Expected format: {query_id: {doc_id: relevance_score}}
             qrels_for_eval = defaultdict(dict)
             for qrel_item in current_dataset_info.qrels:
                 qrels_for_eval[qrel_item.query_id][qrel_item.doc_id] = qrel_item.relevance
             
-            # Run evaluation
             evaluate_models(models_to_evaluate, queries_for_eval, qrels_for_eval, eval_k_values)
+            continue
+        
+        # NEW: Handle Query Optimization option
+        if model_choice == '7':
+            original_query = input("Enter the query to optimize: ").strip()
+            if not original_query:
+                print("Query cannot be empty. Please try again.")
+                continue
+
+            print("Select initial search model for PRF:")
+            print("  1. TF-IDF")
+            print("  2. BERT")
+            prf_model_choice = input("Enter choice (1 or 2): ").strip()
+            
+            retrieval_model_name_for_prf = ""
+            if prf_model_choice == '1':
+                retrieval_model_name_for_prf = 'TF-IDF'
+            elif prf_model_choice == '2':
+                retrieval_model_name_for_prf = 'BERT'
+            else:
+                print("Invalid model choice for PRF. Aborting optimization.")
+                continue
+
+            try:
+                top_n_docs = int(input("Number of top documents for feedback (e.g., 5, 10, 20 - default 5): ") or 5)
+                num_terms = int(input("Number of terms to add to query (e.g., 3, 5 - default 3): ") or 3)
+            except ValueError:
+                print("Invalid number entered. Using default values (5 docs, 3 terms).")
+                top_n_docs = 5
+                num_terms = 3
+
+            expanded_query = query_optimizer.expand_query_with_prf(
+                original_query,
+                retrieval_model_name_for_prf,
+                top_n_docs_for_prf=top_n_docs,
+                num_expansion_terms=num_terms
+            )
+            
+            if expanded_query != original_query:
+                perform_expanded_search = input("Do you want to perform a search with the expanded query? (yes/no): ").strip().lower()
+                if perform_expanded_search == 'yes':
+                    # Directly perform search with expanded query using the previous model_choice context
+                    # Or, better, ask user which model to use for the *expanded* query
+                    print("\nWhich model to use for the expanded query search?")
+                    print("  1. TF-IDF")
+                    print("  2. BERT")
+                    print("  3. Hybrid")
+                    expanded_search_model_choice = input("Enter choice (1-3): ").strip()
+
+                    search_results = []
+                    search_model_name = ""
+                    if expanded_search_model_choice == '1':
+                        search_model_name = "TF-IDF"
+                        search_results = current_dataset_info.vsm_model.search(expanded_query, top_k=10)
+                    elif expanded_search_model_choice == '2':
+                        search_model_name = "BERT Embeddings"
+                        search_results = current_dataset_info.bert_model.search(expanded_query, top_k=10)
+                    elif expanded_search_model_choice == '3':
+                        search_model_name = "Hybrid Search"
+                        search_results = current_dataset_info.hybrid_model.hybrid_search(
+                            expanded_query, 
+                            top_k=10, 
+                            vsm_weight=0.1, bert_weight=0.9, top_k_bert_initial=200
+                        )
+                    else:
+                        print("Invalid choice. Returning to main menu.")
+                        continue # Go back to main menu
+                    
+                    print(f"\n--- Results ({search_model_name} with expanded query - {len(search_results)} found) ---")
+                    if search_results:
+                        for i, (doc_id, score) in enumerate(search_results):
+                            original_text = current_dataset_info.bert_model.documents_text.get(doc_id)
+                            if original_text is None:
+                                converted_doc_id = None
+                                if isinstance(doc_id, str) and doc_id.isdigit(): converted_doc_id = int(doc_id)
+                                elif isinstance(doc_id, int): converted_doc_id = str(doc_id)
+                                if converted_doc_id is not None:
+                                    original_text = current_dataset_info.bert_model.documents_text.get(converted_doc_id)
+                            if original_text is None:
+                                original_text = "Original text not available."
+                            
+                            print(f"{i+1}. Doc ID: {doc_id}, Score: {score:.4f}")
+                            print(f"   Text: {original_text[:200]}...")
+                    else:
+                        print("No relevant documents found with the expanded query.")
+                else:
+                    print("Expanded query generated, but no search performed. Returning to main menu.")
+            else:
+                print("Query not expanded. Returning to main menu.")
             continue # Go back to search options menu
         
+        # Original search options (1, 2, 3)
         if model_choice not in ['1', '2', '3']: 
-            print("Invalid model choice. Please enter 1, 2, 3, 4, 5, or 6.")
+            print("Invalid model choice. Please enter 1, 2, 3, 4, 5, 6 or 7.")
             continue
 
         query_text = input("Enter your query: ").strip()
@@ -258,14 +328,12 @@ def main():
             results = current_dataset_info.bert_model.search(query_text, top_k=10)
         elif model_choice == '3':
             model_used = "Hybrid Search"
-            # Using BERT-primary re-ranking with TF-IDF as secondary signal
-            # Initial weights biased towards BERT, and a larger initial candidate pool
             results = current_dataset_info.hybrid_model.hybrid_search(
                 query_text, 
                 top_k=10, 
-                vsm_weight=0.1,                # Weight for VSM (TF-IDF) in re-ranking
-                bert_weight=0.9,               # Weight for BERT in re-ranking
-                top_k_bert_initial=200         # Retrieve a larger set of initial candidates from BERT
+                vsm_weight=0.1,                
+                bert_weight=0.9,               
+                top_k_bert_initial=200         
             )
 
         end_time = time.time()
@@ -273,12 +341,9 @@ def main():
         print(f"\n--- Results ({model_used} - {len(results)} found in {end_time - start_time:.4f} seconds) ---")
         if results:
             for i, (doc_id, score) in enumerate(results):
-                # Retrieve original text using the bert_model's documents_text, which stores all raw texts
                 original_text = current_dataset_info.bert_model.documents_text.get(doc_id)
 
                 if original_text is None:
-                    # Attempt type conversion as a fallback for debugging the ID mismatch
-                    # This handles cases where doc_id might be int in one place and str in another
                     converted_doc_id = None
                     if isinstance(doc_id, str) and doc_id.isdigit():
                         converted_doc_id = int(doc_id)
@@ -292,7 +357,7 @@ def main():
                     original_text = "Original text not available (ID mismatch or not found)."
                 
                 print(f"{i+1}. Doc ID: {doc_id}, Score: {score:.4f}")
-                print(f"   Text: {original_text[:200]}...") # Print first 200 chars
+                print(f"   Text: {original_text[:200]}...")
         else:
             print("No relevant documents found for your query.")
 
