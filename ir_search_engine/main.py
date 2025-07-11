@@ -1,6 +1,6 @@
 import os
 import sys
-from collections import namedtuple
+from collections import namedtuple, defaultdict # ADDED defaultdict here
 import time
 from tqdm import tqdm # Import tqdm for progress bars
 
@@ -15,6 +15,12 @@ from retrieval_model import VectorSpaceModel
 from bert_retrieval import BERTRetrievalModel
 from hybrid_retrieval import HybridRanker
 
+# Import evaluation functions
+from evaluator import evaluate_models # _prepare_qrels_for_eval is no longer imported here
+
+# Import type hints
+from typing import Dict, List, Union
+
 # Define paths for saving/loading indices and embeddings
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 INDEXES_DIR = os.path.join(DATA_DIR, 'indexes')
@@ -23,22 +29,31 @@ os.makedirs(INDEXES_DIR, exist_ok=True) # Ensure the indexes directory exists
 # Named tuple for convenience to store dataset info
 DatasetInfo = namedtuple('DatasetInfo', ['name', 'docs', 'queries', 'qrels', 'inverted_index', 'bert_embeddings', 'vsm_model', 'bert_model', 'hybrid_model'])
 
-def load_or_build_inverted_index(dataset_name, docs, preprocessor):
+def load_or_build_inverted_index(dataset_name: str, docs: List[Document], preprocessor: TextPreprocessor) -> InvertedIndex:
     """Loads an existing InvertedIndex or builds it from scratch."""
     index_filepath = os.path.join(INDEXES_DIR, f"{dataset_name}_inverted_index.json")
     
     index = InvertedIndex()
     if os.path.exists(index_filepath):
         print(f"Loading Inverted Index for {dataset_name} from {index_filepath}...")
-        index.load(index_filepath)
-        print(f"Inverted index loaded from {index_filepath}")
-    else:
-        print(f"Inverted Index not found for {dataset_name}. Building...")
+        try:
+            index.load(index_filepath)
+            print(f"Inverted index loaded from {index_filepath}")
+        except Exception as e:
+            print(f"Error loading inverted index: {e}. Rebuilding...")
+            # If load fails (e.g., due to old format), fall through to build
+            if os.path.exists(index_filepath):
+                os.remove(index_filepath) # Clean up problematic file
+            pass # Continue to build
+    
+    # Check if index is empty after load attempt or if file didn't exist/was removed
+    # Corrected: Changed index.doc_lengths to index.document_lengths and added hasattr check
+    if not (hasattr(index, 'index') and index.index and len(index.index) > 0 and \
+            hasattr(index, 'document_lengths') and index.document_lengths): 
+        print(f"Inverted Index not found or empty for {dataset_name}. Building...")
         # Preprocess documents for VSM (using lemmatization, no n-grams for base VSM)
-        # We need a list of texts for preprocessor.preprocess_documents
         doc_texts_list = [doc.text for doc in docs]
         
-        # Add tqdm to preprocessing step for VSM
         print("Preprocessing documents for TF-IDF...")
         preprocessed_docs_list = preprocessor.preprocess_documents(
             doc_texts_list, use_stemming=False, use_lemmatization=True, add_ngrams=False,
@@ -58,31 +73,50 @@ def load_or_build_inverted_index(dataset_name, docs, preprocessor):
         print(f"Inverted index built and saved to {index_filepath}")
     return index
 
-def load_or_index_bert_embeddings(dataset_name, raw_documents_dict):
+def load_or_index_bert_embeddings(dataset_name: str, raw_documents_dict: Dict[Union[int, str], str]) -> BERTRetrievalModel:
     """Loads existing BERT embeddings or generates them from scratch."""
     embeddings_filepath_base = os.path.join(INDEXES_DIR, f"{dataset_name}_bert_embeddings")
     
     bert_model = BERTRetrievalModel() # Initialize model (downloads if not present)
     
     # Check for all necessary files for loading
-    if os.path.exists(f"{embeddings_filepath_base}.npy") and \
-       os.path.exists(f"{embeddings_filepath_base}_map.json") and \
-       os.path.exists(f"{embeddings_filepath_base}_text.json"): # Check for _text.json too
+    bert_embeddings_npy = f"{embeddings_filepath_base}.npy"
+    bert_map_json = f"{embeddings_filepath_base}_map.json"
+    bert_text_json = f"{embeddings_filepath_base}_text.json"
+
+    if os.path.exists(bert_embeddings_npy) and \
+       os.path.exists(bert_map_json) and \
+       os.path.exists(bert_text_json):
         print(f"Loading BERT embeddings for {dataset_name} from {embeddings_filepath_base}.npy...")
-        bert_model.load_embeddings(embeddings_filepath_base)
-    else:
-        print(f"BERT embeddings or associated files not found for {dataset_name}. Generating...")
-        bert_model.index_documents(raw_documents_dict) # This method has its own tqdm
-        bert_model.save_embeddings(embeddings_filepath_base)
+        try:
+            bert_model.load_embeddings(embeddings_filepath_base)
+            print("BERT embeddings loaded.")
+            # Ensure documents_text is correctly set from loaded data or raw_documents_dict
+            # The load_embeddings method should set bert_model.documents_text from _text.json
+            # If not, or if _text.json was old/missing, use the fresh raw_documents_dict
+            if not bert_model.documents_text: # If documents_text wasn't populated by load
+                bert_model.documents_text = raw_documents_dict
+            print(f"BERT model ready with {len(bert_model.doc_id_map)} embeddings.")
+            return bert_model
+        except Exception as e:
+            print(f"Error loading BERT embeddings: {e}. Rebuilding...")
+            # Clean up potentially corrupt/old files to force rebuild
+            for f in [bert_embeddings_npy, bert_map_json, bert_text_json]:
+                if os.path.exists(f):
+                    os.remove(f)
+            # Fall through to generate
     
-    # ENSURE documents_text is always populated from the fresh raw_documents_dict
-    # This acts as a fallback/reinforcement for consistency, especially after loading
-    # as load_embeddings will populate it from its own saved file.
+    print(f"BERT embeddings or associated files not found/corrupt for {dataset_name}. Generating...")
+    bert_model.index_documents(raw_documents_dict) # This method has its own tqdm
+    bert_model.save_embeddings(embeddings_filepath_base)
+    print(f"BERT embeddings generated and saved. BERT model ready with {len(bert_model.doc_id_map)} embeddings.")
+    
+    # ENSURE documents_text is always populated from the fresh raw_documents_dict after indexing
     bert_model.documents_text = raw_documents_dict 
     
     return bert_model
 
-def get_raw_documents_dict(docs_list):
+def get_raw_documents_dict(docs_list: List[Document]) -> Dict[Union[int, str], str]:
     """Converts a list of Document namedtuples to a dict {doc_id: text}."""
     return {doc.doc_id: doc.text for doc in tqdm(docs_list, desc="Preparing raw document dict")}
 
@@ -102,7 +136,7 @@ def main():
     while selected_dataset_name not in available_datasets.values():
         print("\nSelect a dataset to load:")
         for key, name in available_datasets.items():
-            print(f"  {key}. {name}")
+            print(f"   {key}. {name}")
         choice = input("Enter your choice (1 or 2): ").strip()
         selected_dataset_name = available_datasets.get(choice)
         if not selected_dataset_name:
@@ -140,8 +174,8 @@ def main():
     current_dataset_info = DatasetInfo(
         name=selected_dataset_name,
         docs=docs, # Raw docs list
-        queries=queries,
-        qrels=qrels,
+        queries=queries, # This is a list of Query objects
+        qrels=qrels, # This is a list of Qrel objects
         inverted_index=inverted_index,
         bert_embeddings=bert_model.document_embeddings_matrix, # Store matrix for reference
         vsm_model=vsm_model,
@@ -156,11 +190,12 @@ def main():
         print("2. BERT Embeddings (Semantic Search)")
         print("3. Hybrid Search (TF-IDF + BERT)")
         print("4. Change Dataset")
-        print("5. Exit")
+        print("5. Run Evaluation") 
+        print("6. Exit") 
         
-        model_choice = input("Select a retrieval model (1-5): ").strip()
+        model_choice = input("Select an option (1-6): ").strip()
 
-        if model_choice == '5':
+        if model_choice == '6': 
             print("Exiting search engine. Goodbye!")
             break
         
@@ -171,8 +206,39 @@ def main():
             main() 
             return # Exit current main call to prevent double loop
 
-        if model_choice not in ['1', '2', '3']:
-            print("Invalid model choice. Please enter 1, 2, 3, 4, or 5.")
+        if model_choice == '5': 
+            if not current_dataset_info.queries or not current_dataset_info.qrels:
+                print("Cannot run evaluation: Queries or Qrels data not loaded for this dataset.")
+                continue
+            
+            # Prepare models dictionary for evaluator
+            models_to_evaluate = {
+                'TF-IDF': current_dataset_info.vsm_model,
+                'BERT': current_dataset_info.bert_model,
+                'Hybrid': current_dataset_info.hybrid_model # Pass the HybridRanker instance directly
+            }
+            
+            # Define k values for evaluation
+            eval_k_values = [1, 5, 10, 20] # Example k values
+
+            # FIX 1: Convert list of Query objects to a dictionary keyed by query ID
+            # ASSUMPTION: Query object has a 'query_id' attribute.
+            # If your data_loader.py defines Query as `namedtuple('Query', ['id', 'text'])`,
+            # then change `q.query_id` to `q.id` below.
+            queries_for_eval = {q.query_id: q for q in current_dataset_info.queries} 
+
+            # FIX 2: Prepare qrels for evaluation: convert list of Qrel namedtuples to a dict of dicts
+            # Expected format: {query_id: {doc_id: relevance_score}}
+            qrels_for_eval = defaultdict(dict)
+            for qrel_item in current_dataset_info.qrels:
+                qrels_for_eval[qrel_item.query_id][qrel_item.doc_id] = qrel_item.relevance
+            
+            # Run evaluation
+            evaluate_models(models_to_evaluate, queries_for_eval, qrels_for_eval, eval_k_values)
+            continue # Go back to search options menu
+        
+        if model_choice not in ['1', '2', '3']: 
+            print("Invalid model choice. Please enter 1, 2, 3, 4, 5, or 6.")
             continue
 
         query_text = input("Enter your query: ").strip()
@@ -192,26 +258,27 @@ def main():
             results = current_dataset_info.bert_model.search(query_text, top_k=10)
         elif model_choice == '3':
             model_used = "Hybrid Search"
-            # Hybrid search can take additional kwargs for VSM, e.g., add_ngrams=True
-            results = current_dataset_info.hybrid_model.hybrid_search(query_text, top_k=10, fusion_method='rrf') # Default to RRF
+            # Using BERT-primary re-ranking with TF-IDF as secondary signal
+            # Initial weights biased towards BERT, and a larger initial candidate pool
+            results = current_dataset_info.hybrid_model.hybrid_search(
+                query_text, 
+                top_k=10, 
+                vsm_weight=0.1,                # Weight for VSM (TF-IDF) in re-ranking
+                bert_weight=0.9,               # Weight for BERT in re-ranking
+                top_k_bert_initial=200         # Retrieve a larger set of initial candidates from BERT
+            )
 
         end_time = time.time()
         
         print(f"\n--- Results ({model_used} - {len(results)} found in {end_time - start_time:.4f} seconds) ---")
         if results:
             for i, (doc_id, score) in enumerate(results):
-                # --- START DEBUG PRINTS FOR TEXT RETRIEVAL ---
-                # 1. Check the type of doc_id coming from the search result
-                # print(f"DEBUG: Result Doc ID: {doc_id}, Type: {type(doc_id)}")
-                
                 # Retrieve original text using the bert_model's documents_text, which stores all raw texts
-                # This dict should have consistent types from raw_documents_dict
                 original_text = current_dataset_info.bert_model.documents_text.get(doc_id)
 
-                # DEBUG: If original_text is still None, it means the key was not found.
-                # Let's try converting types as a fallback for debugging.
                 if original_text is None:
-                    # print(f"DEBUG: Doc ID '{doc_id}' NOT found directly. Attempting type conversion...")
+                    # Attempt type conversion as a fallback for debugging the ID mismatch
+                    # This handles cases where doc_id might be int in one place and str in another
                     converted_doc_id = None
                     if isinstance(doc_id, str) and doc_id.isdigit():
                         converted_doc_id = int(doc_id)
@@ -219,17 +286,11 @@ def main():
                         converted_doc_id = str(doc_id)
                     
                     if converted_doc_id is not None:
-                        # print(f"DEBUG: Trying converted Doc ID '{converted_doc_id}', Type: {type(converted_doc_id)}")
                         original_text = current_dataset_info.bert_model.documents_text.get(converted_doc_id)
-                        # if original_text is not None:
-                            # print(f"DEBUG: Found text with converted ID: '{original_text[:50]}'")
-                        # else:
-                            # print("DEBUG: Still no text found after conversion attempt.")
 
                 if original_text is None:
                     original_text = "Original text not available (ID mismatch or not found)."
-                # --- END DEBUG PRINTS FOR TEXT RETRIEVAL ---
-
+                
                 print(f"{i+1}. Doc ID: {doc_id}, Score: {score:.4f}")
                 print(f"   Text: {original_text[:200]}...") # Print first 200 chars
         else:
