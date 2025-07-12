@@ -17,11 +17,13 @@ class BERTRetrievalModel:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             self.model.to(self.device)
             print(f"Model loaded and moved to {self.device}.")
+            print(f"Model loaded successfully: {self.model is not None}")
         except Exception as e:
             print(f"Error loading SentenceTransformer model: {e}")
             self.model = None
             self.device = torch.device('cpu') # Fallback to CPU if CUDA fails or not available
             print("Falling back to CPU for BERT model.")
+            print(f"Model loading failed: {self.model is None}")
 
         self.document_embeddings_matrix: Optional[np.ndarray] = None
         self.doc_id_map: Dict[Union[int, str], int] = {} # Maps original doc_id to internal numpy index
@@ -33,36 +35,55 @@ class BERTRetrievalModel:
             print("BERT model not loaded. Cannot encode documents.")
             return np.array([])
         
+        print(f"Starting document encoding...")
+        print(f"  - Number of documents: {len(documents)}")
+        print(f"  - Model available: {self.model is not None}")
+        
         doc_texts = list(documents.values())
         doc_ids = list(documents.keys())
 
         embeddings = []
-        for i in tqdm(range(0, len(doc_texts), batch_size), desc="Encoding documents with BERT"):
-            batch_texts = doc_texts[i:i+batch_size]
-            batch_embeddings = self.model.encode(batch_texts, convert_to_numpy=True, show_progress_bar=False)
-            embeddings.append(batch_embeddings)
-        
-        # Concatenate all batch embeddings
-        all_embeddings = np.concatenate(embeddings, axis=0)
+        try:
+            for i in tqdm(range(0, len(doc_texts), batch_size), desc="Encoding documents with BERT"):
+                batch_texts = doc_texts[i:i+batch_size]
+                batch_embeddings = self.model.encode(batch_texts, convert_to_numpy=True, show_progress_bar=False)
+                embeddings.append(batch_embeddings)
+            
+            # Concatenate all batch embeddings
+            all_embeddings = np.concatenate(embeddings, axis=0)
+            print(f"Successfully encoded {all_embeddings.shape[0]} documents with {all_embeddings.shape[1]} dimensions")
 
-        # Update mappings
-        self.doc_id_map = {doc_id: i for i, doc_id in enumerate(doc_ids)}
-        self.reverse_doc_id_map = {i: doc_id for i, doc_id in enumerate(doc_ids)}
-        self.documents_text = documents # Store the raw texts
-        
-        return all_embeddings
+            # Update mappings
+            self.doc_id_map = {doc_id: i for i, doc_id in enumerate(doc_ids)}
+            self.reverse_doc_id_map = {i: doc_id for i, doc_id in enumerate(doc_ids)}
+            self.documents_text = documents # Store the raw texts
+            
+            return all_embeddings
+        except Exception as e:
+            print(f"Error during document encoding: {e}")
+            return np.array([])
 
     def encode_query(self, query: str) -> np.ndarray:
         if not self.model:
             print("BERT model not loaded. Cannot encode query.")
             return np.array([])
-        return self.model.encode(query, convert_to_numpy=True).reshape(1, -1) # Ensure 2D array
+        try:
+            encoded = self.model.encode(query, convert_to_numpy=True).reshape(1, -1) # Ensure 2D array
+            print(f"Query encoded successfully. Shape: {encoded.shape}")
+            return encoded
+        except Exception as e:
+            print(f"Error encoding query: {e}")
+            return np.array([])
 
     def index_documents(self, documents: Dict[Union[int, str], str]):
         """Generates and stores embeddings for a collection of documents."""
         print(f"Generating BERT embeddings for {len(documents)} documents...")
+        print(f"Model status before encoding: {self.model is not None}")
         self.document_embeddings_matrix = self.encode_documents(documents)
-        print(f"Generated {self.document_embeddings_matrix.shape[0]} embeddings of dimension {self.document_embeddings_matrix.shape[1]}.")
+        if self.document_embeddings_matrix is not None and self.document_embeddings_matrix.size > 0:
+            print(f"Generated {self.document_embeddings_matrix.shape[0]} embeddings of dimension {self.document_embeddings_matrix.shape[1]}.")
+        else:
+            print("Warning: No embeddings were generated!")
 
     def save_embeddings(self, filepath_base: str):
         if self.document_embeddings_matrix is None or not self.doc_id_map:
@@ -126,6 +147,13 @@ class BERTRetrievalModel:
         Returns:
             List[Tuple[Union[int, str], float]]: A list of (doc_id, score) tuples, sorted by score.
         """
+        print(f"BERT search debug:")
+        print(f"  - Model exists: {self.model is not None}")
+        print(f"  - Embeddings matrix exists: {self.document_embeddings_matrix is not None}")
+        if self.document_embeddings_matrix is not None:
+            print(f"  - Embeddings shape: {self.document_embeddings_matrix.shape}")
+        print(f"  - Doc ID map size: {len(self.doc_id_map)}")
+        
         if not self.model or self.document_embeddings_matrix is None:
             print("BERT model or document embeddings not loaded.")
             return []

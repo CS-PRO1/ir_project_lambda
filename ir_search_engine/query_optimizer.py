@@ -28,7 +28,13 @@ class QueryOptimizer:
         self.bert_model = bert_model
         self.clusterer = clusterer
         self.top_k_terms = top_k_terms
-        self.preprocessor = inverted_index.preprocessor if hasattr(inverted_index, 'preprocessor') else None
+        # Get preprocessor from inverted_index or vsm_model
+        if hasattr(inverted_index, 'preprocessor') and inverted_index.preprocessor:
+            self.preprocessor = inverted_index.preprocessor
+        elif hasattr(vsm_model, 'preprocessor') and vsm_model.preprocessor:
+            self.preprocessor = vsm_model.preprocessor
+        else:
+            self.preprocessor = None
         # Build vocabulary from inverted index for spelling correction
         self.vocabulary = self._build_vocabulary()
 
@@ -39,12 +45,12 @@ class QueryOptimizer:
             vocabulary.update(self.inverted_index.index.keys())
         return vocabulary
 
-    def correct_spelling(self, query_tokens, confidence_threshold=0.6):
+    def correct_spelling(self, query_tokens, confidence_threshold=0.8):
         """
         Corrects misspelled words in the query using the vocabulary from the inverted index.
         Args:
             query_tokens (list): List of query tokens
-            confidence_threshold (float): Minimum similarity score to consider a correction
+            confidence_threshold (float): Minimum similarity score to consider a correction (higher = more conservative)
         Returns:
             list: Query tokens with corrected spellings
         """
@@ -57,10 +63,19 @@ class QueryOptimizer:
         corrected_tokens = []
         corrections_made = []
         
+        # Common stop words that should rarely be corrected
+        common_stop_words = {'is', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
+        
         for token in query_tokens:
             # If token exists in vocabulary, keep it as is
             if token in self.vocabulary:
                 corrected_tokens.append(token)
+                continue
+            
+            # Be very conservative with common words
+            if token.lower() in common_stop_words:
+                corrected_tokens.append(token)
+                print(f"Keeping common word '{token}' as is")
                 continue
             
             # Find the closest match in vocabulary
@@ -68,9 +83,20 @@ class QueryOptimizer:
             
             if matches:
                 corrected_token = matches[0]
-                corrected_tokens.append(corrected_token)
-                corrections_made.append((token, corrected_token))
-                print(f"Corrected '{token}' to '{corrected_token}'")
+                # Additional check: only correct if the correction is significantly different
+                # and the original token is clearly misspelled
+                if len(token) > 2 and len(corrected_token) > 2:
+                    # Check if the correction makes sense
+                    if corrected_token.lower() != token.lower():
+                        corrected_tokens.append(corrected_token)
+                        corrections_made.append((token, corrected_token))
+                        print(f"Corrected '{token}' to '{corrected_token}'")
+                    else:
+                        corrected_tokens.append(token)
+                        print(f"Keeping '{token}' as is (correction too similar)")
+                else:
+                    corrected_tokens.append(token)
+                    print(f"Keeping short token '{token}' as is")
             else:
                 # If no good match found, keep the original token
                 corrected_tokens.append(token)
@@ -157,28 +183,50 @@ class QueryOptimizer:
         for text in feedback_doc_texts:
             # Use the preprocessor for consistent tokenization and normalization
             # Using same settings as VSM indexing (lemmatization, no n-grams for base terms)
-            preprocessed_tokens_list = self.preprocessor.preprocess_query(
-                text, use_stemming=False, use_lemmatization=True, add_ngrams=False
-            )
+            if self.preprocessor:
+                preprocessed_tokens_list = self.preprocessor.preprocess_query(
+                    text, use_stemming=False, use_lemmatization=True, add_ngrams=False
+                )
+            else:
+                # Fallback: simple tokenization
+                preprocessed_tokens_list = text.lower().split()
             all_feedback_terms.extend(preprocessed_tokens_list) # assuming space-separated terms
 
         # 5. Filter and rank candidate expansion terms
         term_counts = Counter(all_feedback_terms)
 
         # Get preprocessed terms from the corrected query to avoid adding them back
-        preprocessed_corrected_query_terms = set(
-            self.preprocessor.preprocess_query(
-                corrected_query, use_stemming=False, use_lemmatization=True, add_ngrams=False
+        if self.preprocessor:
+            preprocessed_corrected_query_terms = set(
+                self.preprocessor.preprocess_query(
+                    corrected_query, use_stemming=False, use_lemmatization=True, add_ngrams=False
+                )
             )
-        )
+        else:
+            # Fallback: simple tokenization
+            preprocessed_corrected_query_terms = set(corrected_query.lower().split())
         
         # Filter out corrected query terms, stopwords, and very short terms
         candidate_expansion_terms_ranked = []
         # Iterate through most common terms from feedback documents
         for term, count in term_counts.most_common():
-            if (term not in preprocessed_corrected_query_terms and 
-                term not in self.preprocessor.stop_words and # Fixed: use stop_words instead of stopwords
-                len(term) > 1): # Exclude single-character terms, usually noise
+            # Check if term should be excluded
+            exclude_term = False
+            
+            # Exclude if it's in the corrected query
+            if term in preprocessed_corrected_query_terms:
+                exclude_term = True
+            
+            # Exclude if it's a stop word
+            if self.preprocessor and hasattr(self.preprocessor, 'stop_words'):
+                if term in self.preprocessor.stop_words:
+                    exclude_term = True
+            
+            # Exclude very short terms
+            if len(term) <= 1:
+                exclude_term = True
+            
+            if not exclude_term:
                 candidate_expansion_terms_ranked.append(term)
             
             if len(candidate_expansion_terms_ranked) >= num_expansion_terms:
@@ -342,7 +390,12 @@ class QueryOptimizer:
             method (str): "none", "spelling_correction", "spelling_correction_with_expansion", "tfidf_expansion", "bert_semantic_expansion", "cluster_restricted".
             **kwargs: Additional parameters for methods.
         """
-        processed_query_vsm = self.inverted_index.preprocessor.preprocess_query(query.text)
+        # Get processed query for VSM
+        if hasattr(self.inverted_index, 'preprocessor') and self.inverted_index.preprocessor:
+            processed_query_vsm = self.inverted_index.preprocessor.preprocess_query(query.text)
+        else:
+            # Fallback: simple tokenization
+            processed_query_vsm = query.text.lower().split()
         raw_query_text = query.text
 
         if method == "spelling_correction":
