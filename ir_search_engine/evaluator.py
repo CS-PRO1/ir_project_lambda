@@ -12,6 +12,31 @@ from ir_search_engine.preprocessing import TextPreprocessor
 from ir_search_engine.query_optimizer import QueryOptimizer
 from ir_search_engine.clusterer import DocumentClusterer
 
+"""
+Information Retrieval Evaluation Metrics
+
+This module calculates the following four key metrics for search engine evaluation:
+
+1. Mean Average Precision (MAP): 
+   - Average of the precision values after each relevant document is retrieved
+   - Measures both precision and recall in a single metric
+   - Range: [0, 1], higher is better
+
+2. Recall: 
+   - Proportion of relevant documents that were successfully retrieved
+   - Measures completeness of retrieval
+   - Range: [0, 1], higher is better
+
+3. Precision at 10 (P@10): 
+   - Precision of the top 10 retrieved documents
+   - Measures precision at a fixed cutoff
+   - Range: [0, 1], higher is better
+
+4. Mean Reciprocal Rank (MRR): 
+   - Average of the reciprocal of the rank of the first relevant document
+   - Measures how early the first relevant document appears
+   - Range: [0, 1], higher is better
+"""
 
 # --- Metric Calculation Functions (KEEP THESE AS THEY ARE) ---
 def calculate_precision(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int], k: int) -> float:
@@ -87,17 +112,35 @@ def calculate_ap(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[U
 def calculate_map(retrieved_docs_for_query: List[Tuple[Union[int, str], float]], relevant_docs: Dict[Union[int, str], int]) -> float:
     return calculate_ap(retrieved_docs_for_query, relevant_docs)
 
+def calculate_reciprocal_rank(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int]) -> float:
+    """
+    Calculate Reciprocal Rank (RR) for a single query.
+    RR = 1/rank_of_first_relevant_document
+    If no relevant document is found, RR = 0
+    """
+    # Filter relevant_docs to only include truly relevant ones (relevance > 0)
+    true_relevant_doc_ids = {doc_id for doc_id, rel in relevant_docs.items() if rel > 0}
+    
+    if not true_relevant_doc_ids:
+        return 0.0 # No relevant documents for this query
+    
+    # Find the rank of the first relevant document (1-indexed)
+    for i, doc_id in enumerate(retrieved_doc_ids):
+        if doc_id in true_relevant_doc_ids:
+            return 1.0 / (i + 1)  # i+1 because rank is 1-indexed
+    
+    return 0.0 # No relevant document found in retrieved results
+
 
 # --- Main Evaluation Function ---
 def evaluate_models(
     models: Dict[str, Union[VectorSpaceModel, BERTRetrievalModel, HybridRanker]],
     queries: Dict[Union[int, str], Query],
     qrels: Dict[Union[int, str], Dict[Union[int, str], int]],
-    k_values: List[int],
-    # New parameters for optional features
     raw_documents_dict: Dict[Union[int, str], str], # Needed for PRF document content
     preprocessor: TextPreprocessor, # Needed for PRF text processing
     query_optimizer: QueryOptimizer, # Needed for PRF logic
+    k_values: List[int] = [10],  # Default to [10] for internal calculations
     document_clusterer: Optional[DocumentClusterer] = None, # Needed for clustered BERT eval
     use_clustering_for_bert: bool = False,
     use_prf: bool = False,
@@ -195,15 +238,14 @@ def evaluate_models(
         if not query_results: 
             continue
         
-        ndcg_scores = {k: [] for k in k_values}
+        # Focus on the specific metrics requested: MAP, Recall, Precision at 10, MRR
         map_scores = []
-        precision_scores = {k: [] for k in k_values}
-        recall_scores = {k: [] for k in k_values}
-        f1_scores = {k: [] for k in k_values}
+        recall_scores = []  # Overall recall (not at specific k)
+        precision_at_10_scores = []
+        rr_scores = []  # Reciprocal Rank scores for MRR
 
         # Iterate through all queries *defined in the qrels* to ensure metrics are calculated for all
         # queries that have relevance judgments, even if they return no documents.
-        # This prevents division by zero if a model returns no results for a relevant query.
         for query_id in qrels.keys(): # Use qrels.keys() as the source of truth for queries to evaluate
             relevant_docs_for_query = qrels.get(query_id, {})
             retrieved_docs_for_query = query_results.get(query_id, [])
@@ -212,62 +254,50 @@ def evaluate_models(
             num_true_relevant = sum(1 for rel in relevant_docs_for_query.values() if rel > 0)
             
             if num_true_relevant == 0:
-                # If no relevant documents exist for this query, it contributes 1.0 to some metrics (like recall)
-                # and 0.0 to others (like precision, NDCG, MAP if documents were retrieved).
-                # To be precise: If there are no relevant documents, MAP is 0.0, NDCG is 0.0,
-                # Precision can be 0.0 (if retrieved docs), Recall is 1.0.
-                # Common practice is to skip these queries for MAP/NDCG or treat as 0.
-                # For precision/recall, we must consider.
-                
-                # For consistency in averaging, if no relevant docs and no retrieved docs, we skip.
-                # If no relevant docs but some retrieved, then precision is 0, recall is 1.
+                # If no relevant documents exist for this query
                 if not retrieved_docs_for_query:
-                    # Skip for MAP/NDCG/F1 calculation (effectively not contributing to average)
-                    # For precision/recall: if no relevant docs and no retrieved, it's perfect vacuously,
-                    # but often these are just ignored for aggregation.
+                    # Skip for MAP/MRR calculation (no relevant docs and no retrieved)
                     pass 
                 else: # Retrieved docs but no relevant ones
-                    for k in k_values:
-                        ndcg_scores[k].append(0.0)
-                        precision_scores[k].append(0.0)
-                        recall_scores[k].append(1.0) # If no relevant docs, recall is 1.0
-                        f1_scores[k].append(0.0)
-                    map_scores.append(0.0)
+                    precision_at_10_scores.append(0.0)
+                    recall_scores.append(1.0) # If no relevant docs, recall is 1.0
+                    rr_scores.append(0.0) # No relevant document found
+                map_scores.append(0.0)
                 continue # Move to next query
 
             if not retrieved_docs_for_query: # Relevant docs exist, but nothing was retrieved
-                for k in k_values:
-                    ndcg_scores[k].append(0.0)
-                    precision_scores[k].append(0.0)
-                    recall_scores[k].append(0.0)
-                    f1_scores[k].append(0.0)
+                precision_at_10_scores.append(0.0)
+                recall_scores.append(0.0)
+                rr_scores.append(0.0) # No relevant document found
                 map_scores.append(0.0)
                 continue
 
             retrieved_doc_ids_only = [doc_id for doc_id, _ in retrieved_docs_for_query]
 
-            for k in k_values:
-                ndcg_scores[k].append(calculate_ndcg(retrieved_doc_ids_only, relevant_docs_for_query, k))
-                precision_scores[k].append(calculate_precision(retrieved_doc_ids_only, relevant_docs_for_query, k))
-                recall_scores[k].append(calculate_recall(retrieved_doc_ids_only, relevant_docs_for_query, k))
-                f1_scores[k].append(calculate_f1(retrieved_doc_ids_only, relevant_docs_for_query, k))
-
+            # Calculate the specific metrics requested
+            # 1. MAP (Mean Average Precision)
             map_scores.append(calculate_map(retrieved_doc_ids_only, relevant_docs_for_query))
+            
+            # 2. Recall (overall recall, not at specific k)
+            recall_scores.append(calculate_recall(retrieved_doc_ids_only, relevant_docs_for_query, len(retrieved_doc_ids_only)))
+            
+            # 3. Precision at 10
+            precision_at_10_scores.append(calculate_precision(retrieved_doc_ids_only, relevant_docs_for_query, 10))
+            
+            # 4. Reciprocal Rank (for MRR)
+            rr_scores.append(calculate_reciprocal_rank(retrieved_doc_ids_only, relevant_docs_for_query))
 
-        # Average the scores
-        # Ensure we don't divide by zero if a metric list is empty (e.g., all queries skipped)
-        avg_ndcg = {k: np.mean(ndcg_scores[k]) if ndcg_scores[k] else 0.0 for k in k_values}
+        # Calculate averages for the specific metrics
         avg_map = np.mean(map_scores) if map_scores else 0.0
-        avg_precision = {k: np.mean(precision_scores[k]) if precision_scores[k] else 0.0 for k in k_values}
-        avg_recall = {k: np.mean(recall_scores[k]) if recall_scores[k] else 0.0 for k in k_values}
-        avg_f1 = {k: np.mean(f1_scores[k]) if f1_scores[k] else 0.0 for k in k_values}
+        avg_recall = np.mean(recall_scores) if recall_scores else 0.0
+        avg_precision_at_10 = np.mean(precision_at_10_scores) if precision_at_10_scores else 0.0
+        avg_rr = np.mean(rr_scores) if rr_scores else 0.0  # This is MRR (Mean Reciprocal Rank)
 
         final_metrics[model_name] = {
-            'ndcg': avg_ndcg,
-            'map': avg_map,
-            'precision_at_k': avg_precision,
-            'recall_at_k': avg_recall,
-            'f1_at_k': avg_f1
+            'map': avg_map,  # Mean Average Precision
+            'recall': avg_recall,  # Overall Recall
+            'precision_at_10': avg_precision_at_10,  # Precision at 10
+            'mrr': avg_rr  # Mean Reciprocal Rank
         }
     
     return final_metrics

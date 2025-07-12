@@ -91,7 +91,7 @@ def optimize_query_on_server(url: str, dataset: str, query: str, initial_search_
         return None
 
 # Updated evaluate_on_server to accept new parameters
-def evaluate_on_server(url: str, dataset: str, eval_k_values: List[int],
+def evaluate_on_server(url: str, dataset: str,
                        use_clustering_for_bert_evaluation: bool,
                        use_prf_for_evaluation: bool,
                        prf_initial_model: Optional[str],
@@ -100,7 +100,6 @@ def evaluate_on_server(url: str, dataset: str, eval_k_values: List[int],
                        prf_final_model: Optional[str]) -> Optional[Dict]:
     try:
         payload = {
-            "eval_k_values": eval_k_values,
             "use_clustering_for_bert_evaluation": use_clustering_for_bert_evaluation,
             "use_prf_for_evaluation": use_prf_for_evaluation,
             "prf_top_n_docs": prf_top_n_docs,
@@ -306,6 +305,12 @@ elif selected_action == "Search":
 
 elif selected_action == "Query Optimization":
     st.header(f"Query Optimization (PRF) for '{selected_dataset}'")
+    
+    st.info("""
+    **Query Optimization automatically includes:**
+    - **Spell Correction**: Automatically corrects spelling errors in your query
+    - **Term Expansion**: Adds relevant terms from top documents to improve search results
+    """)
 
     original_query_optimize = st.text_input(
         "Enter query to optimize:",
@@ -367,13 +372,6 @@ elif selected_action == "Query Optimization":
         )
         top_k_expanded = st.number_input("Number of top results for expanded search:", min_value=1, value=10, key="expanded_top_k")
 
-        # Adding spell correction option for the expanded query search as well
-        apply_spell_correction_expanded = st.checkbox(
-            "Apply Spell Correction to Expanded Search",
-            value=st.session_state.apply_spell_correction, # Default to main search setting
-            key="apply_spell_correction_expanded_checkbox"
-        )
-
         if st.button("🚀 Search with Expanded Query", key="run_expanded_search_button"):
             with st.spinner(f"Searching with {search_model_for_expanded} model and expanded query..."):
                 expanded_results = search_on_server( # Use search_on_server for consistency
@@ -382,7 +380,7 @@ elif selected_action == "Query Optimization":
                     search_model_for_expanded.lower(),
                     st.session_state.expanded_query,
                     top_k_expanded,
-                    apply_spell_correction_expanded # Pass spell correction
+                    False # No additional spell correction needed since optimized query already includes it
                 )
                 if expanded_results:
                     st.session_state.optimized_search_results = expanded_results
@@ -409,15 +407,13 @@ elif selected_action == "Query Optimization":
 elif selected_action == "Run Evaluation":
     st.header(f"Run Evaluation on '{selected_dataset}' Dataset")
 
-    eval_k_values_str = st.text_input("Enter k values for evaluation (comma-separated):", "1,5,10,20", key="eval_k_values_input")
-    eval_k_values = []
-    try:
-        eval_k_values = [int(k.strip()) for k in eval_k_values_str.split(',') if k.strip()]
-        if not eval_k_values:
-            st.warning("Please enter valid k values.")
-    except ValueError:
-        st.error("Invalid k values. Please enter comma-separated integers.")
-        eval_k_values = []
+    st.info("""
+    **Evaluation Metrics:**
+    - **MAP (Mean Average Precision)**: Average precision after each relevant document is retrieved
+    - **Recall**: Proportion of relevant documents successfully retrieved  
+    - **Precision at 10**: Precision of the top 10 retrieved documents
+    - **MRR (Mean Reciprocal Rank)**: Average of reciprocal rank of first relevant document
+    """)
 
     st.subheader("Evaluation Options")
     col_eval_opt1, col_eval_opt2 = st.columns(2)
@@ -473,7 +469,7 @@ elif selected_action == "Run Evaluation":
         st.session_state.evaluation_results = None
 
     if st.button("📈 Run Evaluation", key="run_evaluation_button"):
-        if selected_dataset and eval_k_values:
+        if selected_dataset:
             # Validate PRF initial model if PRF is enabled
             if use_prf_for_evaluation and not prf_initial_model:
                 st.error("Please select an 'Initial Search Model' for PRF evaluation.")
@@ -482,7 +478,6 @@ elif selected_action == "Run Evaluation":
                     eval_results = evaluate_on_server(
                         SERVER_URL,
                         selected_dataset,
-                        eval_k_values,
                         use_clustering_for_bert_evaluation,
                         use_prf_for_evaluation,
                         prf_initial_model,
@@ -495,17 +490,67 @@ elif selected_action == "Run Evaluation":
                     else:
                         st.session_state.evaluation_results = None
         else:
-            st.warning("Please select a dataset and enter valid k values.")
+            st.warning("Please select a dataset.")
 
     # Always display evaluation results if they exist in session_state
     if st.session_state.evaluation_results:
         st.subheader(f"Evaluation Results for {selected_dataset}:")
-        # Sort results by model name for consistent display
+        
+        # Create a proper table display
+        import pandas as pd
+        
+        # Prepare data for the table
+        table_data = []
         sorted_model_names = sorted(st.session_state.evaluation_results.keys())
+        
         for model_name in sorted_model_names:
             metrics = st.session_state.evaluation_results[model_name]
-            st.markdown(f"#### {model_name} Model")
-            st.json(metrics)
-            st.markdown("---")
+            table_data.append({
+                'Model': model_name,
+                'MAP': f"{metrics.get('map', 0.0):.4f}",
+                'Recall': f"{metrics.get('recall', 0.0):.4f}",
+                'Precision@10': f"{metrics.get('precision_at_10', 0.0):.4f}",
+                'MRR': f"{metrics.get('mrr', 0.0):.4f}"
+            })
+        
+        # Create and display the table
+        df = pd.DataFrame(table_data)
+        
+        # Style the table with better formatting
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Add a summary section
+        st.markdown("---")
+        st.subheader("📊 Performance Summary")
+        
+        # Find the best performing model for each metric
+        if table_data:
+            best_map = max(table_data, key=lambda x: float(x['MAP']))
+            best_recall = max(table_data, key=lambda x: float(x['Recall']))
+            best_precision = max(table_data, key=lambda x: float(x['Precision@10']))
+            best_mrr = max(table_data, key=lambda x: float(x['MRR']))
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Best MAP", f"{best_map['MAP']}", f"Model: {best_map['Model']}")
+                st.metric("Best Recall", f"{best_recall['Recall']}", f"Model: {best_recall['Model']}")
+            with col2:
+                st.metric("Best Precision@10", f"{best_precision['Precision@10']}", f"Model: {best_precision['Model']}")
+                st.metric("Best MRR", f"{best_mrr['MRR']}", f"Model: {best_mrr['Model']}")
+        
+        # Add download option for the results
+        st.markdown("---")
+        csv = df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Results as CSV",
+            data=csv,
+            file_name=f"evaluation_results_{selected_dataset}.csv",
+            mime="text/csv"
+        )
+        
     elif "run_evaluation_button" in st.session_state and st.session_state["run_evaluation_button"] and not st.session_state.evaluation_results:
         st.info("Evaluation failed or no results returned.")

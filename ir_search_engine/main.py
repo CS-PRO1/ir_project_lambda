@@ -170,7 +170,7 @@ def main():
     )
 
     # NEW: Initialize QueryOptimizer
-    query_optimizer = QueryOptimizer(preprocessor, vsm_model, bert_model)
+    query_optimizer = QueryOptimizer(inverted_index, vsm_model, bert_model)
 
 
     # --- Interactive Search Loop ---
@@ -246,9 +246,19 @@ def main():
                 top_n_docs = 5
                 num_terms = 3
 
+            # Get the appropriate retrieval model
+            if retrieval_model_name_for_prf == 'TF-IDF':
+                retrieval_model = current_dataset_info.vsm_model
+            elif retrieval_model_name_for_prf == 'BERT':
+                retrieval_model = current_dataset_info.bert_model
+            else:
+                print("Invalid model choice for PRF. Aborting optimization.")
+                continue
+
             expanded_query = query_optimizer.expand_query_with_prf(
                 original_query,
-                retrieval_model_name_for_prf,
+                retrieval_model,
+                current_dataset_info.bert_model.documents_text,  # raw_documents_dict
                 top_n_docs_for_prf=top_n_docs,
                 num_expansion_terms=num_terms
             )

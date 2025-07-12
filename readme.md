@@ -1,109 +1,227 @@
-# Comprehensive IR Search Engine
+# Information Retrieval Search Engine
 
-This project implements a comprehensive Information Retrieval (IR) search engine with various advanced features, including diverse document representations, optimized indexing, document clustering, and query optimization. It leverages datasets from `ir_datasets` and provides thorough evaluation capabilities.
+A comprehensive Information Retrieval (IR) search engine system with multiple retrieval models, document clustering, query optimization, and thorough evaluation capabilities. The system provides both a FastAPI backend server and a Streamlit web interface for easy interaction.
 
-## Project Structure
+## 🏗️ System Architecture
 
-The project is organized into the following modules:
+### Core Components
 
--   `main.py`: The main entry point for running the search engine, orchestrating the different stages.
--   `data_loader.py`: Handles downloading and loading datasets from `ir_datasets`.
--   `preprocessing.py`: Contains functions for text cleaning, tokenization, stop word removal, stemming, lemmatization, and N-gram generation.
--   `indexing.py`: Responsible for building and managing the inverted index.
--   `representation.py`: Implements different document and query representation models (VSM TF-IDF, BERT Embeddings, Hybrid).
--   `clustering.py`: Provides functionality for document clustering.
--   `query_optimization.py`: Implements techniques for optimizing user queries.
--   `evaluation.py`: Contains functions to calculate standard IR metrics (MAP, Recall, Precision@10, MRR).
--   `utils.py`: A utility module for common helper functions (e.g., file I/O, multi-threading helpers).
+The system consists of several interconnected modules:
 
-## Features
+1. **Data Loading & Management** (`data_loader.py`)
+   - Downloads and manages datasets from `ir_datasets`
+   - Supports `antique_train` and `beir_webist_touche2020` datasets
+   - Handles documents, queries, and relevance judgments
 
--   **Dataset Handling**: Utilizes `ir_datasets` for `antique_train` and `beir_webist_touche2020`.
--   **Text Preprocessing**: Robust cleaning, stop word removal, stemming, lemmatization, and support for 2-word and 3-word terms.
--   **Optimized Indexing**: Efficient inverted index implementation for fast retrieval.
--   **Document Representations**:
-    -   Vector Space Model (VSM) with TF-IDF weighting.
-    -   BERT Embedding-based representation for semantic understanding.
-    -   Hybrid representation combining VSM and BERT.
--   **Document Clustering**: Groups similar documents for enhanced Browse or query refinement.
--   **Query Optimization**: Techniques to improve query effectiveness.
--   **Comprehensive Evaluation**: Calculates MAP, Recall, Precision@10, and MRR, with and without clustering/query optimization.
--   **Performance Optimization**: Utilizes multi-threading for various stages to maximize efficiency.
+2. **Text Preprocessing** (`preprocessing.py`)
+   - Text cleaning and normalization
+   - Tokenization and stop word removal
+   - Stemming and lemmatization
+   - N-gram generation
+   - Spell correction using `pyspellchecker`
 
-## Installation
+3. **Indexing System** (`indexer.py`)
+   - Inverted index construction for fast retrieval
+   - TF-IDF weighting
+   - Efficient document lookup
 
-1.  Clone the repository:
-    ```bash
-    git clone [https://github.com/yourusername/ir-search-engine.git](https://github.com/yourusername/ir-search-engine.git)
-    cd ir-search-engine
-    ```
-2.  Create a virtual environment (recommended):
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: `venv\Scripts\activate`
-    ```
-3.  Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-    (You will need to create `requirements.txt` with `ir_datasets`, `nltk`, `scikit-learn`, `transformers`, `torch` or `tensorflow`, `faiss-cpu` (for efficient similarity search with embeddings), `numpy`, `scipy`, `tqdm`.)
+4. **Retrieval Models**
+   - **Vector Space Model (VSM)** (`retrieval_model.py`): Traditional TF-IDF based retrieval
+   - **BERT Model** (`bert_retrieval.py`): Semantic search using BERT embeddings
+   - **Hybrid Model** (`hybrid_retrieval.py`): Combines VSM and BERT for enhanced performance
 
-## Usage
+5. **Advanced Features**
+   - **Document Clustering** (`clusterer.py`): Groups similar documents using K-means
+   - **Query Optimization** (`query_optimizer.py`): Pseudo-Relevance Feedback (PRF) for query expansion
+   - **Evaluation** (`evaluator.py`): Comprehensive IR metrics (MAP, Recall, Precision@10, MRR)
 
-A typical workflow would involve:
+6. **Web Interface**
+   - **FastAPI Backend** (`server.py`): RESTful API for all operations
+   - **Streamlit Frontend** (`client_app.py`): User-friendly web interface
 
-1.  **Load Data**:
-    ```python
-    from data_loader import DataLoader
-    data_loader = DataLoader()
-    corpus_antique, queries_antique, qrels_antique = data_loader.load_antique_train()
-    corpus_webist, queries_webist, qrels_webist = data_loader.load_beir_webist_touche2020()
-    ```
-2.  **Preprocess Data**:
-    ```python
-    from preprocessing import TextPreprocessor
-    preprocessor = TextPreprocessor()
-    processed_corpus = preprocessor.preprocess_documents(corpus_antique)
-    ```
-3.  **Build Index**:
-    ```python
-    from indexing import InvertedIndex
-    index = InvertedIndex()
-    index.build_index(processed_corpus)
-    ```
-4.  **Represent Documents/Queries**:
-    ```python
-    from representation import VSMRepresentation, BERTEmbeddingRepresentation, HybridRepresentation
-    vsm_model = VSMRepresentation(index.get_vocabulary())
-    doc_vectors_vsm = vsm_model.create_document_vectors(processed_corpus)
+### How It Works
 
-    bert_model = BERTEmbeddingRepresentation()
-    doc_embeddings_bert = bert_model.create_document_embeddings(corpus_antique) # Use raw text for BERT
-    ```
-5.  **Run Search and Evaluate**:
-    ```python
-    from evaluation import IREvaluator
-    from query_optimization import QueryOptimizer
+1. **Data Loading**: The system loads documents, queries, and relevance judgments from IR datasets
+2. **Preprocessing**: Text is cleaned, tokenized, and normalized for indexing
+3. **Indexing**: An inverted index is built for fast document retrieval
+4. **Model Training**: BERT embeddings are generated and clustering is performed
+5. **Search**: Users can search using different models (VSM, BERT, Hybrid)
+6. **Evaluation**: Comprehensive metrics are calculated to assess performance
 
-    # VSM Evaluation
-    retrieved_docs_vsm = # ... perform search using VSM ...
-    evaluator = IREvaluator()
-    map_vsm, recall_vsm, p10_vsm, mrr_vsm = evaluator.evaluate(qrels_antique, retrieved_docs_vsm)
+## 🚀 Installation Guide
 
-    # With Query Optimization and Clustering (Conceptual)
-    # query_optimizer = QueryOptimizer(...)
-    # optimized_queries = query_optimizer.optimize_queries(queries_antique)
-    # clusterer = DocumentClusterer(...)
-    # clusters = clusterer.cluster_documents(doc_embeddings_bert)
-    # ... then run search and evaluate again ...
-    ```
+### Prerequisites
 
-For detailed usage and to run the complete pipeline, refer to `main.py` and individual module files.
+- Python 3.8 or higher
+- Git
+- At least 4GB RAM (8GB recommended for BERT models)
 
-## Contributing
+### Step-by-Step Installation
 
-Contributions are welcome! Please open an issue or submit a pull request.
+1. **Clone the Repository**
+   ```bash
+   git clone <repository-url>
+   cd ir_project_lambda
+   ```
 
-## License
+2. **Create Virtual Environment**
+   ```bash
+   # On Windows
+   python -m venv venv
+   .venv\Scripts\activate
 
-This project is licensed under the MIT License.
+   # On macOS/Linux
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+3. **Install Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Download Required Data**
+   ```bash
+   # The system will automatically download datasets on first run
+   # This may take several minutes depending on your internet connection
+   ```
+
+## 🏃‍♂️ Running the System
+
+### Option 1: Web Interface (Recommended)
+
+1. **Start the Backend Server**
+   ```bash
+   # Make sure your virtual environment is activated
+   uvicorn ir_search_engine.server:app --host 127.0.0.1 --port 8000 --reload
+   ```
+   The server will:
+   - Load and preprocess datasets
+   - Build inverted indexes
+   - Generate BERT embeddings
+   - Perform document clustering
+   - Initialize all models
+
+2. **Start the Streamlit Frontend**
+   ```bash
+   # In a new terminal (with virtual environment activated)
+   streamlit run ir_search_engine/client_app.py
+   ```
+
+3. **Access the Web Interface**
+   - Open your browser and go to `http://localhost:8501`
+   - Select your dataset and start searching!
+
+### Option 2: Command Line Interface
+
+1. **Run the Main Script**
+   ```bash
+   python ir_search_engine/main.py
+   ```
+
+2. **Follow the Interactive Prompts**
+   - Choose your dataset
+   - Select search model
+   - Enter queries
+   - View results and metrics
+
+## 📊 Features
+
+### Search Capabilities
+
+- **Multiple Models**: TF-IDF, BERT, and Hybrid retrieval
+- **Spell Correction**: Automatic query spelling correction
+- **Clustered Search**: Search within document clusters for better relevance
+- **Query Optimization**: PRF-based query expansion
+
+### Evaluation Metrics
+
+The system calculates four key IR metrics:
+
+1. **MAP (Mean Average Precision)**: Measures overall retrieval effectiveness
+2. **Recall**: Proportion of relevant documents retrieved
+3. **Precision@10**: Precision of top 10 results
+4. **MRR (Mean Reciprocal Rank)**: How early the first relevant document appears
+
+### Web Interface Features
+
+- **Interactive Search**: Real-time search with multiple models
+- **Results Display**: Clean table format with document previews
+- **Evaluation Dashboard**: Comprehensive metrics table with performance summaries
+- **Export Functionality**: Download results as CSV files
+- **Document Viewing**: Full-text document display
+
+## 🔧 Configuration
+
+### Server Settings
+
+- **Default URL**: `http://127.0.0.1:8000`
+- **Default Port**: 8000
+- **Dataset Storage**: `./data/` directory
+
+### Model Parameters
+
+- **BERT Model**: `sentence-transformers/all-MiniLM-L6-v2`
+- **Clustering**: 5 clusters by default
+- **PRF Parameters**: Configurable via web interface
+
+## 📁 Project Structure
+
+```
+ir_project_lambda/
+├── data/                          # Dataset storage
+│   ├── antique_train/             # Antique dataset
+│   ├── beir_webis-touche2020/    # WebIS dataset
+│   └── indexes/                   # Cached indexes and embeddings
+├── ir_search_engine/
+│   ├── server.py                  # FastAPI backend
+│   ├── client_app.py              # Streamlit frontend
+│   ├── main.py                    # CLI entry point
+│   ├── data_loader.py             # Dataset management
+│   ├── preprocessing.py            # Text preprocessing
+│   ├── indexer.py                 # Inverted index
+│   ├── retrieval_model.py         # VSM implementation
+│   ├── bert_retrieval.py          # BERT model
+│   ├── hybrid_retrieval.py        # Hybrid model
+│   ├── clusterer.py               # Document clustering
+│   ├── query_optimizer.py         # Query optimization
+│   ├── evaluator.py               # Evaluation metrics
+│   └── __init__.py
+├── requirements.txt               # Python dependencies
+└── README.md                     # This file
+```
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+1. **Server Connection Error**
+   - Ensure the backend server is running on port 8000
+   - Check if the URL in the web interface matches your server
+
+2. **Memory Issues**
+   - BERT models require significant RAM
+   - Consider using smaller models or reducing batch sizes
+
+3. **Dataset Loading Errors**
+   - Check internet connection for dataset downloads
+   - Ensure sufficient disk space in the `data/` directory
+
+4. **CUDA/GPU Issues**
+   - The system automatically falls back to CPU if CUDA is unavailable
+   - BERT models will work on CPU (slower but functional)
+
+### Performance Tips
+
+- **First Run**: Initial setup may take 15-30 minutes for dataset processing
+- **Subsequent Runs**: Much faster due to cached indexes and embeddings
+- **Memory Usage**: Close other applications if experiencing memory issues
+- **Network**: Ensure stable internet for initial dataset downloads
+
+
+## 🙏 Acknowledgments
+
+- Built with FastAPI, Streamlit, and Transformers
+- Uses datasets from `ir_datasets`
+- Implements standard IR evaluation metrics
+- Inspired by modern information retrieval research

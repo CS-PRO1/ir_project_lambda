@@ -1,5 +1,6 @@
 from collections import Counter
 import random
+from difflib import get_close_matches
 
 class QueryOptimizer:
     def __init__(self, inverted_index, vsm_model, bert_model, clusterer=None, top_k_terms=5):
@@ -8,6 +9,74 @@ class QueryOptimizer:
         self.bert_model = bert_model
         self.clusterer = clusterer # Optional, for cluster-based query expansion
         self.top_k_terms = top_k_terms
+        # Build vocabulary from inverted index for spelling correction
+        self.vocabulary = self._build_vocabulary()
+
+    def _build_vocabulary(self):
+        """Build vocabulary from the inverted index for spelling correction."""
+        vocabulary = set()
+        if hasattr(self.inverted_index, 'index'):
+            vocabulary.update(self.inverted_index.index.keys())
+        return vocabulary
+
+    def correct_spelling(self, query_tokens, confidence_threshold=0.6):
+        """
+        Corrects misspelled words in the query using the vocabulary from the inverted index.
+        Args:
+            query_tokens (list): List of query tokens
+            confidence_threshold (float): Minimum similarity score to consider a correction
+        Returns:
+            list: Query tokens with corrected spellings
+        """
+        print(f"Correcting spelling for query: {' '.join(query_tokens)}")
+        
+        if not self.vocabulary:
+            print("No vocabulary available for spelling correction.")
+            return query_tokens
+        
+        corrected_tokens = []
+        corrections_made = []
+        
+        for token in query_tokens:
+            # If token exists in vocabulary, keep it as is
+            if token in self.vocabulary:
+                corrected_tokens.append(token)
+                continue
+            
+            # Find the closest match in vocabulary
+            matches = get_close_matches(token, self.vocabulary, n=1, cutoff=confidence_threshold)
+            
+            if matches:
+                corrected_token = matches[0]
+                corrected_tokens.append(corrected_token)
+                corrections_made.append((token, corrected_token))
+                print(f"Corrected '{token}' to '{corrected_token}'")
+            else:
+                # If no good match found, keep the original token
+                corrected_tokens.append(token)
+                print(f"No correction found for '{token}', keeping original")
+        
+        if corrections_made:
+            print(f"Spelling corrections made: {corrections_made}")
+        else:
+            print("No spelling corrections needed.")
+            
+        return corrected_tokens
+
+    def spelling_correction_with_expansion(self, query_tokens, top_n_docs=5, confidence_threshold=0.6):
+        """
+        First corrects spelling, then expands the corrected query using TF-IDF.
+        This is a more practical approach that combines spelling correction with expansion.
+        """
+        print(f"Applying spelling correction with expansion for query: {' '.join(query_tokens)}")
+        
+        # First, correct spelling
+        corrected_tokens = self.correct_spelling(query_tokens, confidence_threshold)
+        
+        # Then expand the corrected query
+        expanded_tokens = self.query_expansion_tfidf(corrected_tokens, top_n_docs)
+        
+        return expanded_tokens
 
     def query_expansion_tfidf(self, query_tokens, top_n_docs=5):
         """
@@ -138,13 +207,20 @@ class QueryOptimizer:
         Applies chosen query optimization method.
         Args:
             query (Query): The query object (from data_loader).
-            method (str): "none", "tfidf_expansion", "bert_semantic_expansion", "cluster_restricted".
+            method (str): "none", "spelling_correction", "spelling_correction_with_expansion", "tfidf_expansion", "bert_semantic_expansion", "cluster_restricted".
             **kwargs: Additional parameters for methods.
         """
         processed_query_vsm = self.inverted_index.preprocessor.preprocess_query(query.text)
         raw_query_text = query.text
 
-        if method == "tfidf_expansion":
+        if method == "spelling_correction":
+            confidence_threshold = kwargs.get('confidence_threshold', 0.6)
+            return self.correct_spelling(processed_query_vsm, confidence_threshold)
+        elif method == "spelling_correction_with_expansion":
+            confidence_threshold = kwargs.get('confidence_threshold', 0.6)
+            top_n_docs = kwargs.get('top_n_docs', 5)
+            return self.spelling_correction_with_expansion(processed_query_vsm, top_n_docs, confidence_threshold)
+        elif method == "tfidf_expansion":
             return self.query_expansion_tfidf(processed_query_vsm, **kwargs)
         elif method == "bert_semantic_expansion":
             query_embedding = self.bert_model.create_query_embedding(raw_query_text)
