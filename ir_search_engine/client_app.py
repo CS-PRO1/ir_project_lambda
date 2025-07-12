@@ -1,12 +1,10 @@
-# client_app.py
-
 import streamlit as st
 import requests
 import json
 from typing import Dict, List, Union, Optional
 
 # --- Configuration ---
-SERVER_URL = "http://127.0.0.1:8000" 
+SERVER_URL = "http://127.0.0.1:8000"
 
 # --- Helper functions to interact with the server ---
 
@@ -15,7 +13,13 @@ def get_available_datasets_from_server(url: str) -> List[str]:
     try:
         response = requests.get(f"{url}/datasets")
         response.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
-        return response.json()
+        
+        # --- FIX STARTS HERE ---
+        # The server is returning a list of strings directly, e.g., ["dataset1", "dataset2"]
+        # So, we just return it as is.
+        return response.json() 
+        # --- FIX ENDS HERE ---
+
     except requests.exceptions.ConnectionError:
         st.error(f"Could not connect to the server at {url}. Please ensure the server is running.")
         return []
@@ -23,16 +27,44 @@ def get_available_datasets_from_server(url: str) -> List[str]:
         st.error(f"Error fetching datasets: {e}")
         return []
 
-def search_on_server(url: str, dataset: str, model_type: str, query: str, top_k: int) -> Optional[List[Dict]]:
+def search_on_server(url: str, dataset: str, model_type: str, query: str, top_k: int, apply_spell_correction: bool = False) -> Optional[List[Dict]]:
     try:
-        response = requests.post(f"{url}/search/{dataset}/{model_type}", json={"query": query, "top_k": top_k})
+        response = requests.post(
+            f"{url}/search/{dataset}/{model_type}",
+            json={
+                "query": query,
+                "top_k": top_k,
+                "apply_spell_correction": apply_spell_correction # New parameter
+            }
+        )
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         st.error(f"Error during search: {e}")
         try:
-            # Attempt to show server's error details if available in response body
-            st.json(response.json()) 
+            st.json(response.json())
+        except json.JSONDecodeError:
+            st.text(f"Server returned non-JSON error: {response.text}")
+        return None
+
+# New function for clustered search
+def search_with_clustering_on_server(url: str, dataset: str, query: str, top_k: int, target_cluster_id: Optional[int] = None, apply_spell_correction: bool = False) -> Optional[List[Dict]]:
+    try:
+        payload = {
+            "query": query,
+            "top_k": top_k,
+            "apply_spell_correction": apply_spell_correction
+        }
+        if target_cluster_id is not None:
+            payload["target_cluster_id"] = target_cluster_id
+
+        response = requests.post(f"{url}/cluster/{dataset}/search", json=payload)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error during clustered search: {e}")
+        try:
+            st.json(response.json())
         except json.JSONDecodeError:
             st.text(f"Server returned non-JSON error: {response.text}")
         return None
@@ -40,7 +72,7 @@ def search_on_server(url: str, dataset: str, model_type: str, query: str, top_k:
 def optimize_query_on_server(url: str, dataset: str, query: str, initial_search_model: str, top_n_docs: int, num_terms: int) -> Optional[str]:
     try:
         response = requests.post(
-            f"{url}/optimize_query/{dataset}", 
+            f"{url}/optimize_query/{dataset}",
             json={
                 "query": query,
                 "initial_search_model": initial_search_model,
@@ -58,9 +90,28 @@ def optimize_query_on_server(url: str, dataset: str, query: str, initial_search_
             st.text(f"Server returned non-JSON error: {response.text}")
         return None
 
-def evaluate_on_server(url: str, dataset: str, eval_k_values: List[int]) -> Optional[Dict]:
+# Updated evaluate_on_server to accept new parameters
+def evaluate_on_server(url: str, dataset: str, eval_k_values: List[int],
+                       use_clustering_for_bert_evaluation: bool,
+                       use_prf_for_evaluation: bool,
+                       prf_initial_model: Optional[str],
+                       prf_top_n_docs: int,
+                       prf_num_expansion_terms: int,
+                       prf_final_model: Optional[str]) -> Optional[Dict]:
     try:
-        response = requests.post(f"{url}/evaluate/{dataset}", json={"eval_k_values": eval_k_values})
+        payload = {
+            "eval_k_values": eval_k_values,
+            "use_clustering_for_bert_evaluation": use_clustering_for_bert_evaluation,
+            "use_prf_for_evaluation": use_prf_for_evaluation,
+            "prf_top_n_docs": prf_top_n_docs,
+            "prf_num_expansion_terms": prf_num_expansion_terms
+        }
+        if prf_initial_model: # Only add if a model is selected
+            payload["prf_initial_model"] = prf_initial_model
+        if prf_final_model: # Only add if a final model is selected
+            payload["prf_final_model"] = prf_final_model
+
+        response = requests.post(f"{url}/evaluate/{dataset}", json=payload)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -106,6 +157,10 @@ if 'original_query_optimize' not in st.session_state:
     st.session_state.original_query_optimize = ""
 if 'optimized_search_results' not in st.session_state:
     st.session_state.optimized_search_results = []
+if 'search_type' not in st.session_state: # New: For clustered search option
+    st.session_state.search_type = 'Standard Search'
+if 'apply_spell_correction' not in st.session_state: # New: For spell correction
+    st.session_state.apply_spell_correction = False
 
 
 # --- Sidebar for Server/Dataset Selection ---
@@ -120,8 +175,11 @@ available_datasets = get_available_datasets_from_server(SERVER_URL)
 if available_datasets:
     selected_dataset = st.sidebar.selectbox(
         "Select Dataset:",
-        available_datasets,
-        key="selected_dataset" # Streamlit handles this in session_state automatically
+        # --- FIX STARTS HERE ---
+        # Now available_datasets is directly a list of strings
+        available_datasets, 
+        # --- FIX ENDS HERE ---
+        key="selected_dataset"
     )
 else:
     st.warning("No datasets available or server not reachable. Please check server logs.")
@@ -132,7 +190,7 @@ st.sidebar.header("Actions")
 selected_action = st.sidebar.radio(
     "Choose Action:",
     ["Search", "Query Optimization", "Run Evaluation"],
-    key="selected_action" # Streamlit handles this in session_state automatically
+    key="selected_action"
 )
 
 # --- Main Content Area ---
@@ -141,74 +199,108 @@ if not selected_dataset:
 elif selected_action == "Search":
     st.header(f"Search in '{selected_dataset}' Dataset")
 
-    # Use value from session_state for text_input
     query_input = st.text_input(
-        "Enter your search query:", 
-        value=st.session_state.search_query, 
-        key="search_query_input_widget" # Unique key for the widget
+        "Enter your search query:",
+        value=st.session_state.search_query,
+        key="search_query_input_widget"
     )
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        # Use index to set initial value from session_state.selected_search_model
-        model_choice = st.radio(
-            "Select Search Model:",
+
+    col_search_options, col_k_sc = st.columns(2)
+    with col_search_options:
+        search_type = st.radio(
+            "Select Search Type:",
+            ('Standard Search', 'Clustered Search (BERT Only)'),
+            key="search_type_widget",
+            horizontal=True,
+            index=['Standard Search', 'Clustered Search (BERT Only)'].index(st.session_state.search_type)
+        )
+        st.session_state.search_type = search_type # Update session state
+
+    with col_k_sc:
+        top_k_input = st.number_input(
+            "Number of top results:",
+            min_value=1,
+            value=st.session_state.top_k_search,
+            key="top_k_input_widget"
+        )
+        apply_spell_correction = st.checkbox(
+            "Apply Spell Correction",
+            value=st.session_state.apply_spell_correction,
+            key="apply_spell_correction_checkbox"
+        )
+        st.session_state.apply_spell_correction = apply_spell_correction # Update session state
+
+    target_cluster_id = None
+    if search_type == 'Clustered Search (BERT Only)':
+        st.info("Clustered search currently uses the BERT model internally.")
+        target_cluster_id = st.number_input(
+            "Target Cluster ID (Leave empty for auto-detection):",
+            min_value=0,
+            value=None, # Default to auto-detection
+            key="target_cluster_id_input"
+        )
+
+
+    if st.button("🚀 Search", key="run_search_button"):
+        if query_input:
+            st.session_state.search_query = query_input
+            st.session_state.top_k_search = top_k_input
+
+            with st.spinner(f"Searching with {search_type}..."):
+                retrieved_results = None
+                if search_type == 'Standard Search':
+                    model_choice = st.session_state.selected_search_model # Use the radio button state
+                    retrieved_results = search_on_server(
+                        SERVER_URL,
+                        selected_dataset,
+                        model_choice.lower(),
+                        query_input,
+                        top_k_input,
+                        apply_spell_correction # Pass spell correction option
+                    )
+                elif search_type == 'Clustered Search (BERT Only)':
+                    retrieved_results = search_with_clustering_on_server(
+                        SERVER_URL,
+                        selected_dataset,
+                        query_input,
+                        top_k_input,
+                        target_cluster_id,
+                        apply_spell_correction # Pass spell correction option
+                    )
+
+                if retrieved_results:
+                    st.session_state.search_results = retrieved_results
+                else:
+                    st.session_state.search_results = []
+        else:
+            st.warning("Please enter a query.")
+            st.session_state.search_results = []
+
+    # Display search model choice for Standard Search only
+    if search_type == 'Standard Search':
+        st.session_state.selected_search_model = st.radio(
+            "Select Standard Search Model:",
             ('TF-IDF', 'BERT', 'Hybrid'),
-            key="search_model_choice_widget", # Unique key for the widget
+            key="standard_search_model_choice_widget",
             horizontal=True,
             index=['TF-IDF', 'BERT', 'Hybrid'].index(st.session_state.selected_search_model)
         )
-    with col2:
-        # Use value from session_state for number_input
-        top_k_input = st.number_input(
-            "Number of top results:", 
-            min_value=1, 
-            value=st.session_state.top_k_search, 
-            key="top_k_input_widget" # Unique key for the widget
-        )
 
-    # When search button is clicked, update session_state and perform search
-    if st.button("🚀 Search", key="run_search_button"):
-        if query_input:
-            # Update session state with current widget values before search
-            st.session_state.search_query = query_input
-            st.session_state.selected_search_model = model_choice
-            st.session_state.top_k_search = top_k_input
-            
-            with st.spinner(f"Searching with {model_choice} model..."):
-                retrieved_results = search_on_server(
-                    SERVER_URL, 
-                    selected_dataset, 
-                    model_choice.lower(), 
-                    query_input, 
-                    top_k_input
-                )
-                if retrieved_results:
-                    st.session_state.search_results = retrieved_results # Store results
-                else:
-                    st.session_state.search_results = [] # Clear if no results or error
-        else:
-            st.warning("Please enter a query.")
-            st.session_state.search_results = [] # Clear results if query is empty
 
-    # Always display results if they exist in session_state
     if st.session_state.search_results:
-        st.subheader(f"Results for '{st.session_state.search_query}' ({st.session_state.selected_search_model}):")
+        st.subheader(f"Results for '{st.session_state.search_query}' ({search_type}):")
         for i, res in enumerate(st.session_state.search_results):
             st.markdown(f"**{i+1}. Document ID: `{res['doc_id']}` (Score: `{res['score']:.4f}`)**")
             with st.expander("Preview / Full Text"):
                 st.write(res['text_preview'])
-                # Ensure unique keys for buttons inside loops
                 if st.button(f"Load Full Text for {res['doc_id']}", key=f"full_text_button_{res['doc_id']}"):
                     full_text = get_document_text_from_server(SERVER_URL, selected_dataset, res['doc_id'])
                     if full_text:
-                        # Use unique key for the text_area too, so it doesn't disappear if another button is clicked
                         st.text_area(f"Full Text for {res['doc_id']}", full_text, height=300, key=f"full_text_display_{res['doc_id']}")
                     else:
                         st.warning("Could not retrieve full text.")
             st.markdown("---")
-    elif st.session_state.search_query and not st.session_state.search_results and "run_search_button" in st.session_state and st.session_state["run_search_button"]:
-        # Only show this if search was attempted and returned no results (avoids showing on initial load)
+    elif query_input and not st.session_state.search_results and st.button("🚀 Search", key="run_search_button_recheck", help="Hidden re-check button"): # Add a unique key here too
         st.info("No results found for your query.")
 
 
@@ -216,7 +308,7 @@ elif selected_action == "Query Optimization":
     st.header(f"Query Optimization (PRF) for '{selected_dataset}'")
 
     original_query_optimize = st.text_input(
-        "Enter query to optimize:", 
+        "Enter query to optimize:",
         value=st.session_state.original_query_optimize,
         key="optimize_query_input_widget"
     )
@@ -240,18 +332,18 @@ elif selected_action == "Query Optimization":
 
     if st.button("✨ Optimize Query", key="run_optimize_button"):
         if original_query_optimize:
-            st.session_state.original_query_optimize = original_query_optimize # Save original query
+            st.session_state.original_query_optimize = original_query_optimize
             with st.spinner("Optimizing query..."):
                 expanded_query = optimize_query_on_server(
-                    SERVER_URL, 
-                    selected_dataset, 
-                    original_query_optimize, 
-                    prf_initial_model, 
-                    prf_top_n_docs, 
+                    SERVER_URL,
+                    selected_dataset,
+                    original_query_optimize,
+                    prf_initial_model,
+                    prf_top_n_docs,
                     prf_num_terms
                 )
                 if expanded_query:
-                    st.session_state.expanded_query = expanded_query # Store expanded query
+                    st.session_state.expanded_query = expanded_query
                     st.success("Query Optimized!")
                     st.markdown(f"**Original Query:** `{original_query_optimize}`")
                     st.markdown(f"**Expanded Query:** `{expanded_query}`")
@@ -262,9 +354,7 @@ elif selected_action == "Query Optimization":
             st.warning("Please enter a query to optimize.")
             st.session_state.expanded_query = ""
 
-    # Display expanded query and search option if expanded_query exists in session state
     if st.session_state.expanded_query:
-        # Re-display expanded query even on rerun
         st.markdown(f"**Original Query:** `{st.session_state.original_query_optimize}`")
         st.markdown(f"**Expanded Query:** `{st.session_state.expanded_query}`")
 
@@ -277,21 +367,28 @@ elif selected_action == "Query Optimization":
         )
         top_k_expanded = st.number_input("Number of top results for expanded search:", min_value=1, value=10, key="expanded_top_k")
 
+        # Adding spell correction option for the expanded query search as well
+        apply_spell_correction_expanded = st.checkbox(
+            "Apply Spell Correction to Expanded Search",
+            value=st.session_state.apply_spell_correction, # Default to main search setting
+            key="apply_spell_correction_expanded_checkbox"
+        )
+
         if st.button("🚀 Search with Expanded Query", key="run_expanded_search_button"):
             with st.spinner(f"Searching with {search_model_for_expanded} model and expanded query..."):
-                expanded_results = search_on_server(
-                    SERVER_URL, 
-                    selected_dataset, 
-                    search_model_for_expanded.lower(), 
-                    st.session_state.expanded_query, # Use the stored expanded query
-                    top_k_expanded
+                expanded_results = search_on_server( # Use search_on_server for consistency
+                    SERVER_URL,
+                    selected_dataset,
+                    search_model_for_expanded.lower(),
+                    st.session_state.expanded_query,
+                    top_k_expanded,
+                    apply_spell_correction_expanded # Pass spell correction
                 )
                 if expanded_results:
-                    st.session_state.optimized_search_results = expanded_results # Store results
+                    st.session_state.optimized_search_results = expanded_results
                 else:
-                    st.session_state.optimized_search_results = [] # Clear if no results
-        
-        # Display optimized search results
+                    st.session_state.optimized_search_results = []
+
         if st.session_state.optimized_search_results:
             st.subheader(f"Results for Expanded Query ({search_model_for_expanded}):")
             for i, res in enumerate(st.session_state.optimized_search_results):
@@ -322,27 +419,93 @@ elif selected_action == "Run Evaluation":
         st.error("Invalid k values. Please enter comma-separated integers.")
         eval_k_values = []
 
+    st.subheader("Evaluation Options")
+    col_eval_opt1, col_eval_opt2 = st.columns(2)
+
+    with col_eval_opt1:
+        use_clustering_for_bert_evaluation = st.checkbox(
+            "Include 'BERT + Clustering' in Evaluation",
+            key="eval_clustering_checkbox"
+        )
+    with col_eval_opt2:
+        use_prf_for_evaluation = st.checkbox(
+            "Include 'Query Optimization (PRF)' in Evaluation",
+            key="eval_prf_checkbox"
+        )
+
+    # PRF Options (conditionally displayed)
+    if use_prf_for_evaluation:
+        st.markdown("---")
+        st.subheader("Query Optimization (PRF) Evaluation Parameters")
+        col_prf_eval1, col_prf_eval2, col_prf_eval3, col_prf_eval4 = st.columns(4)
+        with col_prf_eval1:
+            prf_initial_model = st.selectbox(
+                "PRF Initial Search Model:",
+                ('TF-IDF', 'BERT'),
+                key="eval_prf_initial_model"
+            )
+        with col_prf_eval2:
+            prf_top_n_docs = st.number_input(
+                "PRF Top N Docs for Feedback:", min_value=1, value=5, key="eval_prf_top_docs"
+            )
+        with col_prf_eval3:
+            prf_num_expansion_terms = st.number_input(
+                "PRF Num Terms to Add:", min_value=1, value=3, key="eval_prf_num_terms"
+            )
+        with col_prf_eval4:
+            prf_final_model = st.selectbox(
+                "PRF Final Search Model:",
+                ('TF-IDF', 'BERT', 'Hybrid'),
+                index=2, # Default to Hybrid
+                help="Model to use for the final search with the expanded query.",
+                key="eval_prf_final_model"
+            )
+    else:
+        # Set PRF parameters to default/None if not used, to ensure clean payload
+        prf_initial_model = None
+        prf_top_n_docs = 0
+        prf_num_expansion_terms = 0
+        prf_final_model = None
+
+
     # Store evaluation results in session state
     if 'evaluation_results' not in st.session_state:
         st.session_state.evaluation_results = None
 
     if st.button("📈 Run Evaluation", key="run_evaluation_button"):
         if selected_dataset and eval_k_values:
-            with st.spinner("Running evaluation (this may take a while)..."):
-                eval_results = evaluate_on_server(SERVER_URL, selected_dataset, eval_k_values)
-                if eval_results:
-                    st.session_state.evaluation_results = eval_results # Store results
-                else:
-                    st.session_state.evaluation_results = None # Clear on failure
+            # Validate PRF initial model if PRF is enabled
+            if use_prf_for_evaluation and not prf_initial_model:
+                st.error("Please select an 'Initial Search Model' for PRF evaluation.")
+            else:
+                with st.spinner("Running evaluation (this may take a while)..."):
+                    eval_results = evaluate_on_server(
+                        SERVER_URL,
+                        selected_dataset,
+                        eval_k_values,
+                        use_clustering_for_bert_evaluation,
+                        use_prf_for_evaluation,
+                        prf_initial_model,
+                        prf_top_n_docs,
+                        prf_num_expansion_terms,
+                        prf_final_model
+                    )
+                    if eval_results:
+                        st.session_state.evaluation_results = eval_results
+                    else:
+                        st.session_state.evaluation_results = None
         else:
             st.warning("Please select a dataset and enter valid k values.")
-    
+
     # Always display evaluation results if they exist in session_state
     if st.session_state.evaluation_results:
         st.subheader(f"Evaluation Results for {selected_dataset}:")
-        for model_name, metrics in st.session_state.evaluation_results.items():
+        # Sort results by model name for consistent display
+        sorted_model_names = sorted(st.session_state.evaluation_results.keys())
+        for model_name in sorted_model_names:
+            metrics = st.session_state.evaluation_results[model_name]
             st.markdown(f"#### {model_name} Model")
-            st.json(metrics) 
+            st.json(metrics)
             st.markdown("---")
     elif "run_evaluation_button" in st.session_state and st.session_state["run_evaluation_button"] and not st.session_state.evaluation_results:
         st.info("Evaluation failed or no results returned.")

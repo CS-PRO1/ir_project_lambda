@@ -1,223 +1,273 @@
-import time
+import numpy as np
 from collections import defaultdict
-import math # Import math for log2 in NDCG calculation
-# CORRECTED IMPORT: Added Tuple
-from typing import Dict, List, Set, Tuple, Union
+from typing import Dict, List, Union, Any, Optional, Tuple
 from tqdm import tqdm
-# Assuming these are available from your project structure
-from retrieval_model import VectorSpaceModel
-from bert_retrieval import BERTRetrievalModel
-from hybrid_retrieval import HybridRanker
-from data_loader import Query # Assuming Query class is in data_loader or defined elsewhere
 
-class Evaluator:
-    def __init__(self):
-        pass # No specific initialization needed for the evaluator itself
+# Ensure these imports are correct based on your project structure
+from ir_search_engine.data_loader import Query, Qrel
+from ir_search_engine.retrieval_model import VectorSpaceModel
+from ir_search_engine.bert_retrieval import BERTRetrievalModel
+from ir_search_engine.hybrid_retrieval import HybridRanker
+from ir_search_engine.preprocessing import TextPreprocessor
+from ir_search_engine.query_optimizer import QueryOptimizer
+from ir_search_engine.clusterer import DocumentClusterer
 
-    @staticmethod
-    def calculate_precision_at_k(retrieved_docs: List[Tuple[str, float]], qrels: Dict[str, int], k: int) -> float:
-        """
-        Calculates Precision@K.
 
-        :param retrieved_docs: A list of (doc_id, score) tuples, ranked.
-        :param qrels: A dictionary of relevant document IDs and their relevance scores for a query.
-        :param k: The number of top documents to consider.
-        :return: Precision@K value.
-        """
-        if k <= 0 or not retrieved_docs:
-            return 0.0
+# --- Metric Calculation Functions (KEEP THESE AS THEY ARE) ---
+def calculate_precision(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int], k: int) -> float:
+    # ... (existing code) ...
+    # (Assuming the rest of the metric functions like calculate_recall, calculate_f1,
+    #  calculate_ndcg, calculate_map are also correctly defined here)
+    relevant_retrieved = 0
+    for i, doc_id in enumerate(retrieved_doc_ids[:k]):
+        if doc_id in relevant_docs and relevant_docs[doc_id] > 0:
+            relevant_retrieved += 1
+    return relevant_retrieved / k if k > 0 else 0.0
 
-        relevant_retrieved = 0
-        for i in range(min(k, len(retrieved_docs))):
-            doc_id = retrieved_docs[i][0]
-            if doc_id in qrels and qrels[doc_id] > 0: # Assuming relevance score > 0 means relevant
-                relevant_retrieved += 1
-        return relevant_retrieved / k
-
-    @staticmethod
-    def calculate_recall_at_k(retrieved_docs: List[Tuple[str, float]], qrels: Dict[str, int], k: int) -> float:
-        """
-        Calculates Recall@K.
-
-        :param retrieved_docs: A list of (doc_id, score) tuples, ranked.
-        :param qrels: A dictionary of relevant document IDs and their relevance scores for a query.
-        :param k: The number of top documents to consider.
-        :return: Recall@K value.
-        """
-        if not qrels: # No relevant documents for this query
-            return 0.0
-        
-        num_relevant_docs = sum(1 for score in qrels.values() if score > 0)
-        if num_relevant_docs == 0: # Should not happen if not qrels is checked, but as a safeguard
-            return 0.0
-
-        relevant_retrieved = 0
-        for i in range(min(k, len(retrieved_docs))):
-            doc_id = retrieved_docs[i][0]
-            if doc_id in qrels and qrels[doc_id] > 0:
-                relevant_retrieved += 1
-        return relevant_retrieved / num_relevant_docs
-
-    @staticmethod
-    def calculate_ndcg_at_k(retrieved_docs: List[Tuple[str, float]], qrels: Dict[str, int], k: int) -> float:
-        """
-        Calculates Normalized Discounted Cumulative Gain (NDCG@K).
-
-        :param retrieved_docs: A list of (doc_id, score) tuples, ranked.
-        :param qrels: A dictionary of relevant document IDs and their relevance scores for a query.
-        :param k: The number of top documents to consider.
-        :return: NDCG@K value.
-        """
-        if not retrieved_docs or k <= 0:
-            return 0.0
-
-        dcg = 0.0
-        for i in range(min(k, len(retrieved_docs))):
-            doc_id = retrieved_docs[i][0]
-            relevance = qrels.get(doc_id, 0)
-            dcg += relevance / math.log2(i + 2) # i+1 for 1-based indexing, +1 for log argument
-
-        # Calculate Ideal DCG (IDCG)
-        ideal_relevance_scores = sorted([score for score in qrels.values() if score > 0], reverse=True)
-        idcg = 0.0
-        for i in range(min(k, len(ideal_relevance_scores))):
-            idcg += ideal_relevance_scores[i] / math.log2(i + 2)
-
-        return dcg / idcg if idcg > 0 else 0.0
-
-    @staticmethod
-    def calculate_average_precision(retrieved_docs: List[Tuple[str, float]], qrels: Dict[str, int]) -> float:
-        """
-        Calculates Average Precision (AP).
-
-        :param retrieved_docs: A list of (doc_id, score) tuples, ranked.
-        :param qrels: A dictionary of relevant document IDs and their relevance scores for a query.
-        :return: Average Precision value.
-        """
-        if not qrels:
-            return 0.0
-
-        relevant_docs_in_qrels = {doc_id for doc_id, score in qrels.items() if score > 0}
-        
-        if not relevant_docs_in_qrels: # No relevant documents for this query
-            return 0.0
-
-        sum_precisions = 0.0
-        relevant_count = 0
-        
-        for i, (doc_id, _) in enumerate(retrieved_docs):
-            if doc_id in relevant_docs_in_qrels:
-                relevant_count += 1
-                precision_at_i = relevant_count / (i + 1)
-                sum_precisions += precision_at_i
-        
-        return sum_precisions / len(relevant_docs_in_qrels)
-
-def evaluate_models(models_to_evaluate: Dict[str, Union[VectorSpaceModel, BERTRetrievalModel, HybridRanker]],
-                    queries: Dict[str, Query], qrels: Dict[str, Dict[str, int]],
-                    top_k_values: List[int]):
-    """
-    Evaluates multiple retrieval models and prints their performance metrics.
-
-    :param models_to_evaluate: A dictionary of model instances (e.g., {"TF-IDF": vsm_model}).
-    :param queries: A dictionary of Query objects, keyed by query_id.
-    :param qrels: A dictionary of relevance judgments {query_id: {doc_id: relevance_score}}.
-    :param top_k_values: A list of K values for P@K, R@K, NDCG@K.
-    """
-    evaluator = Evaluator()
-    all_results = defaultdict(lambda: defaultdict(float))
+def calculate_recall(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int], k: int) -> float:
+    num_relevant_docs = sum(1 for rel in relevant_docs.values() if rel > 0)
+    if num_relevant_docs == 0:
+        return 1.0 # If there are no relevant documents, perfect recall is achieved vacuously
     
-    max_k_for_search = max(top_k_values) # Get max K to perform single search per query
+    relevant_retrieved = 0
+    for doc_id in retrieved_doc_ids[:k]:
+        if doc_id in relevant_docs and relevant_docs[doc_id] > 0:
+            relevant_retrieved += 1
+    return relevant_retrieved / num_relevant_docs
 
-    for model_name, model_obj in models_to_evaluate.items():
+def calculate_f1(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int], k: int) -> float:
+    p = calculate_precision(retrieved_doc_ids, relevant_docs, k)
+    r = calculate_recall(retrieved_doc_ids, relevant_docs, k)
+    if p + r == 0:
+        return 0.0
+    return (2 * p * r) / (p + r)
+
+def calculate_dcg(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int], k: int) -> float:
+    dcg = 0.0
+    for i, doc_id in enumerate(retrieved_doc_ids[:k]):
+        relevance = relevant_docs.get(doc_id, 0)
+        dcg += relevance / np.log2(i + 2) # i+1 is rank, so i+2 for log2(rank+1)
+    return dcg
+
+def calculate_idcg(relevant_docs: Dict[Union[int, str], int], k: int) -> float:
+    # Sort relevant documents by relevance score in descending order
+    ideal_relevances = sorted([rel for rel in relevant_docs.values() if rel > 0], reverse=True)
+    ideal_dcg = 0.0
+    for i, relevance in enumerate(ideal_relevances[:k]):
+        ideal_dcg += relevance / np.log2(i + 2)
+    return ideal_dcg
+
+def calculate_ndcg(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int], k: int) -> float:
+    dcg = calculate_dcg(retrieved_doc_ids, relevant_docs, k)
+    idcg = calculate_idcg(relevant_docs, k)
+    return dcg / idcg if idcg > 0 else 0.0
+
+def calculate_ap(retrieved_doc_ids: List[Union[int, str]], relevant_docs: Dict[Union[int, str], int]) -> float:
+    # Calculate Average Precision
+    precisions = []
+    num_relevant_found = 0
+    
+    # Filter relevant_docs to only include truly relevant ones (relevance > 0)
+    true_relevant_doc_ids = {doc_id for doc_id, rel in relevant_docs.items() if rel > 0}
+    
+    if not true_relevant_doc_ids:
+        return 0.0 # No relevant documents for this query, AP is 0
+    
+    for i, doc_id in enumerate(retrieved_doc_ids):
+        if doc_id in true_relevant_doc_ids:
+            num_relevant_found += 1
+            precision_at_k = num_relevant_found / (i + 1)
+            precisions.append(precision_at_k)
+    
+    if not precisions:
+        return 0.0 # No relevant documents retrieved
+    
+    return sum(precisions) / len(true_relevant_doc_ids)
+
+def calculate_map(retrieved_docs_for_query: List[Tuple[Union[int, str], float]], relevant_docs: Dict[Union[int, str], int]) -> float:
+    return calculate_ap(retrieved_docs_for_query, relevant_docs)
+
+
+# --- Main Evaluation Function ---
+def evaluate_models(
+    models: Dict[str, Union[VectorSpaceModel, BERTRetrievalModel, HybridRanker]],
+    queries: Dict[Union[int, str], Query],
+    qrels: Dict[Union[int, str], Dict[Union[int, str], int]],
+    k_values: List[int],
+    # New parameters for optional features
+    raw_documents_dict: Dict[Union[int, str], str], # Needed for PRF document content
+    preprocessor: TextPreprocessor, # Needed for PRF text processing
+    query_optimizer: QueryOptimizer, # Needed for PRF logic
+    document_clusterer: Optional[DocumentClusterer] = None, # Needed for clustered BERT eval
+    use_clustering_for_bert: bool = False,
+    use_prf: bool = False,
+    prf_initial_model_name: Optional[str] = None, # e.g., 'TF-IDF', 'BERT'
+    prf_top_n_docs: int = 5,
+    prf_num_expansion_terms: int = 3,
+    prf_final_model_name: Optional[str] = None # New: Which model to use for the final search after PRF
+) -> Dict[str, Dict[str, Any]]:
+    
+    all_results = defaultdict(lambda: defaultdict(list)) # Stores (doc_id, score) for each query-model combination
+    
+    # 1. Evaluate existing models
+    for model_name, model_instance in models.items():
+        if model_instance is None:
+            print(f"Skipping evaluation for {model_name}: model not initialized.")
+            continue
+        
         print(f"Evaluating {model_name}...")
-        
-        # Define the search function dynamically based on the model type and name
-        if model_name == "TF-IDF":
-            search_func = lambda q_obj, top_k: model_obj.search(q_obj.text, top_k=top_k)
-        elif model_name == "BERT":
-            search_func = lambda q_obj, top_k: model_obj.search(q_obj.text, top_k=top_k)
-        elif model_name == "Hybrid":
-            # Corrected call for HybridRanker's hybrid_search method
-            # Removed 'fusion_method' and added specific weights and top_k_bert_initial
-            search_func = lambda q_obj, top_k: model_obj.hybrid_search(
-                q_obj.text, 
-                top_k=top_k, 
-                vsm_weight=0.1,               # Matching the weights set in main.py
-                bert_weight=0.9,              # Matching the weights set in main.py
-                top_k_bert_initial=200        # Matching the initial K set in main.py
-            )
+        for query_id, query_obj in tqdm(queries.items(), desc=f"Evaluating {model_name}"):
+            # All search methods (VSM, BERT, Hybrid) should accept a string query and return List[Tuple[doc_id, score]]
+            if model_name.lower() == 'hybrid':
+                retrieved_docs = model_instance.hybrid_search(
+                    query_obj.text, 
+                    top_k=max(k_values) * 2, # Fetch more just in case to cover all k_values
+                    vsm_weight=0.1, 
+                    bert_weight=0.9, 
+                    top_k_bert_initial=max(k_values) * 5 # Enough initial BERT docs for hybrid
+                )
+            else:
+                retrieved_docs = model_instance.search(query_obj.text, top_k=max(k_values) * 2) # Fetch more just in case
+
+            all_results[model_name][query_id] = retrieved_docs
+
+    # 2. Evaluate with Clustering (if enabled)
+    if use_clustering_for_bert and document_clusterer and 'BERT' in models:
+        bert_model_instance = models['BERT']
+        if not bert_model_instance:
+            print("Cannot perform clustered BERT evaluation: BERT model not available.")
         else:
-            raise ValueError(f"Unknown model name for evaluation: {model_name}")
+            print(f"Evaluating BERT with Clustering...")
+            model_name_clustered = "BERT + Clustering"
+            for query_id, query_obj in tqdm(queries.items(), desc=f"Evaluating {model_name_clustered}"):
+                query_embedding = bert_model_instance.encode_query(query_obj.text)
+                nearest_cluster_id = document_clusterer.find_nearest_cluster(query_embedding)
+                cluster_doc_ids = document_clusterer.get_documents_in_cluster(nearest_cluster_id)
+                
+                # Use the modified BERT search that accepts candidate_doc_ids
+                retrieved_docs_clustered = bert_model_instance.search(
+                    query_obj.text, 
+                    top_k=max(k_values) * 2, # Fetch enough for all k_values
+                    candidate_doc_ids=cluster_doc_ids
+                )
+                all_results[model_name_clustered][query_id] = retrieved_docs_clustered
 
-        query_ids = list(queries.keys())
+    # 3. Evaluate with PRF (if enabled)
+    if use_prf and query_optimizer and prf_initial_model_name:
+        initial_retrieval_model = models.get(prf_initial_model_name)
+        if not initial_retrieval_model:
+            print(f"Cannot perform PRF evaluation: Initial model '{prf_initial_model_name}' not available or initialized.")
+        else:
+            final_retrieval_model_instance = models.get(prf_final_model_name if prf_final_model_name else prf_initial_model_name)
+            if not final_retrieval_model_instance:
+                print(f"Cannot perform PRF evaluation: Final model '{prf_final_model_name or prf_initial_model_name}' not available or initialized.")
+            else:
+                print(f"Evaluating {prf_initial_model_name} with PRF (final search with {prf_final_model_name or prf_initial_model_name})...")
+                model_name_prf = f"{prf_initial_model_name} + PRF (final: {prf_final_model_name or prf_initial_model_name})"
+                
+                for query_id, query_obj in tqdm(queries.items(), desc=f"Evaluating {model_name_prf}"):
+                    expanded_query = query_optimizer.expand_query_with_prf(
+                        original_query=query_obj.text,
+                        retrieval_model=initial_retrieval_model,
+                        raw_documents_dict=raw_documents_dict,
+                        top_n_docs_for_prf=prf_top_n_docs,
+                        num_expansion_terms=prf_num_expansion_terms
+                    )
+                    
+                    # Perform search with the expanded query using the specified final model
+                    if prf_final_model_name and prf_final_model_name.lower() == 'hybrid':
+                        retrieved_docs_prf = final_retrieval_model_instance.hybrid_search(
+                            expanded_query, 
+                            top_k=max(k_values) * 2,
+                            vsm_weight=0.1, 
+                            bert_weight=0.9, 
+                            top_k_bert_initial=max(k_values) * 5
+                        )
+                    else:
+                        retrieved_docs_prf = final_retrieval_model_instance.search(expanded_query, top_k=max(k_values) * 2)
+                    
+                    all_results[model_name_prf][query_id] = retrieved_docs_prf
+
+
+    # 4. Calculate metrics for all collected results
+    final_metrics = {}
+    for model_name, query_results in all_results.items():
+        if not query_results: 
+            continue
         
-        # For each query, perform search and calculate metrics
-        # Use tqdm for a progress bar
-        for query_id in tqdm(query_ids, desc=f"Running queries for {model_name}"):
-            query = queries[query_id]
-            query_qrels = qrels.get(query_id, {})
+        ndcg_scores = {k: [] for k in k_values}
+        map_scores = []
+        precision_scores = {k: [] for k in k_values}
+        recall_scores = {k: [] for k in k_values}
+        f1_scores = {k: [] for k in k_values}
 
-            # Perform search for the current query
-            # We search for max_k_for_search to cover all P@K, R@K, NDCG@K values
-            results = search_func(query, top_k=max_k_for_search) 
+        # Iterate through all queries *defined in the qrels* to ensure metrics are calculated for all
+        # queries that have relevance judgments, even if they return no documents.
+        # This prevents division by zero if a model returns no results for a relevant query.
+        for query_id in qrels.keys(): # Use qrels.keys() as the source of truth for queries to evaluate
+            relevant_docs_for_query = qrels.get(query_id, {})
+            retrieved_docs_for_query = query_results.get(query_id, [])
+
+            # Handle cases where there are no relevant documents or no retrieved documents
+            num_true_relevant = sum(1 for rel in relevant_docs_for_query.values() if rel > 0)
             
-            # Calculate metrics for current query
-            # Precision@K
-            for k in top_k_values:
-                p_at_k = evaluator.calculate_precision_at_k(results, query_qrels, k)
-                all_results[model_name][f'P@{k}'] += p_at_k
+            if num_true_relevant == 0:
+                # If no relevant documents exist for this query, it contributes 1.0 to some metrics (like recall)
+                # and 0.0 to others (like precision, NDCG, MAP if documents were retrieved).
+                # To be precise: If there are no relevant documents, MAP is 0.0, NDCG is 0.0,
+                # Precision can be 0.0 (if retrieved docs), Recall is 1.0.
+                # Common practice is to skip these queries for MAP/NDCG or treat as 0.
+                # For precision/recall, we must consider.
+                
+                # For consistency in averaging, if no relevant docs and no retrieved docs, we skip.
+                # If no relevant docs but some retrieved, then precision is 0, recall is 1.
+                if not retrieved_docs_for_query:
+                    # Skip for MAP/NDCG/F1 calculation (effectively not contributing to average)
+                    # For precision/recall: if no relevant docs and no retrieved, it's perfect vacuously,
+                    # but often these are just ignored for aggregation.
+                    pass 
+                else: # Retrieved docs but no relevant ones
+                    for k in k_values:
+                        ndcg_scores[k].append(0.0)
+                        precision_scores[k].append(0.0)
+                        recall_scores[k].append(1.0) # If no relevant docs, recall is 1.0
+                        f1_scores[k].append(0.0)
+                    map_scores.append(0.0)
+                continue # Move to next query
 
-            # Recall@K
-            for k in top_k_values:
-                r_at_k = evaluator.calculate_recall_at_k(results, query_qrels, k)
-                all_results[model_name][f'R@{k}'] += r_at_k
+            if not retrieved_docs_for_query: # Relevant docs exist, but nothing was retrieved
+                for k in k_values:
+                    ndcg_scores[k].append(0.0)
+                    precision_scores[k].append(0.0)
+                    recall_scores[k].append(0.0)
+                    f1_scores[k].append(0.0)
+                map_scores.append(0.0)
+                continue
 
-            # NDCG@K
-            for k in top_k_values:
-                ndcg_at_k = evaluator.calculate_ndcg_at_k(results, query_qrels, k)
-                all_results[model_name][f'NDCG@{k}'] += ndcg_at_k
+            retrieved_doc_ids_only = [doc_id for doc_id, _ in retrieved_docs_for_query]
 
-            # MAP (Mean Average Precision)
-            ap = evaluator.calculate_average_precision(results, query_qrels)
-            all_results[model_name]['MAP'] += ap
+            for k in k_values:
+                ndcg_scores[k].append(calculate_ndcg(retrieved_doc_ids_only, relevant_docs_for_query, k))
+                precision_scores[k].append(calculate_precision(retrieved_doc_ids_only, relevant_docs_for_query, k))
+                recall_scores[k].append(calculate_recall(retrieved_doc_ids_only, relevant_docs_for_query, k))
+                f1_scores[k].append(calculate_f1(retrieved_doc_ids_only, relevant_docs_for_query, k))
 
-        # Average metrics across all queries
-        num_queries = len(query_ids)
-        for metric, total_value in all_results[model_name].items():
-            all_results[model_name][metric] = total_value / num_queries
+            map_scores.append(calculate_map(retrieved_doc_ids_only, relevant_docs_for_query))
 
-    # Print summary table
-    print("\n--- Evaluation Summary ---")
-    headers = ["Model"] + [f"P@{k}" for k in top_k_values] + \
-              [f"R@{k}" for k in top_k_values] + \
-              [f"NDCG@{k}" for k in top_k_values] + ["MAP"]
+        # Average the scores
+        # Ensure we don't divide by zero if a metric list is empty (e.g., all queries skipped)
+        avg_ndcg = {k: np.mean(ndcg_scores[k]) if ndcg_scores[k] else 0.0 for k in k_values}
+        avg_map = np.mean(map_scores) if map_scores else 0.0
+        avg_precision = {k: np.mean(precision_scores[k]) if precision_scores[k] else 0.0 for k in k_values}
+        avg_recall = {k: np.mean(recall_scores[k]) if recall_scores[k] else 0.0 for k in k_values}
+        avg_f1 = {k: np.mean(f1_scores[k]) if f1_scores[k] else 0.0 for k in k_values}
+
+        final_metrics[model_name] = {
+            'ndcg': avg_ndcg,
+            'map': avg_map,
+            'precision_at_k': avg_precision,
+            'recall_at_k': avg_recall,
+            'f1_at_k': avg_f1
+        }
     
-    # Dynamically determine column widths based on max header/value length
-    col_widths = {header: len(header) for header in headers}
-    for model_name in models_to_evaluate.keys():
-        col_widths["Model"] = max(col_widths["Model"], len(model_name))
-        for k in top_k_values:
-            col_widths[f"P@{k}"] = max(col_widths[f"P@{k}"], len(f"{all_results[model_name][f'P@{k}']:.4f}"))
-            col_widths[f"R@{k}"] = max(col_widths[f"R@{k}"], len(f"{all_results[model_name][f'R@{k}']:.4f}"))
-            col_widths[f"NDCG@{k}"] = max(col_widths[f"NDCG@{k}"], len(f"{all_results[model_name][f'NDCG@{k}']:.4f}"))
-        col_widths["MAP"] = max(col_widths["MAP"], len(f"{all_results[model_name]['MAP']:.4f}"))
-
-    # Print header row
-    header_str = ""
-    for header in headers:
-        header_str += f"{header:<{col_widths[header] + 2}}" # Add 2 for padding
-    print(header_str)
-    print("-" * len(header_str))
-
-    # Print results for each model
-    for model_name, metrics in all_results.items():
-        row_str = f"{model_name:<{col_widths['Model'] + 2}}"
-        for k in top_k_values:
-            row_str += f"{metrics[f'P@{k}']:{col_widths[f'P@{k}']}.4f}  "
-        for k in top_k_values:
-            row_str += f"{metrics[f'R@{k}']:{col_widths[f'R@{k}']}.4f}  "
-        for k in top_k_values:
-            row_str += f"{metrics[f'NDCG@{k}']:{col_widths[f'NDCG@{k}']}.4f}  "
-        row_str += f"{metrics['MAP']:{col_widths['MAP']}.4f}  "
-        print(row_str)
+    return final_metrics

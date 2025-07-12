@@ -296,16 +296,7 @@ class OptimizationRequest(BaseModel):
     top_n_docs_for_prf: int = 5
     num_expansion_terms: int = 3
 
-class EvaluationRequest(BaseModel):
-    eval_k_values: List[int] = [1, 5, 10, 20]
-
-class EvaluationMetrics(BaseModel):
-    model_name: str
-    ndcg: Dict[int, float]
-    map_score: float
-    precision_at_k: Dict[int, float]
-    recall_at_k: Dict[int, float]
-    f1_at_k: Dict[int, float]
+# Remove duplicate class definitions - they're already defined above
 
 class FullDocumentResponse(BaseModel):
     doc_id: Union[int, str]
@@ -326,6 +317,24 @@ class ClusterSearchRequest(BaseModel):
     top_k: int = 10
     apply_spell_correction: bool = False
 
+class EvaluationRequest(BaseModel):
+    eval_k_values: List[int] = [1, 5, 10, 20]
+    # New options for clustering and PRF
+    use_clustering_for_bert_evaluation: bool = False
+    use_prf_for_evaluation: bool = False
+    prf_initial_model: Optional[str] = None # e.g., 'TF-IDF', 'BERT'
+    prf_top_n_docs: int = 5
+    prf_num_expansion_terms: int = 3
+    prf_final_model: Optional[str] = None # e.g., 'TF-IDF', 'BERT', 'Hybrid'. If None, uses initial.
+
+class EvaluationMetrics(BaseModel):
+    # ... (existing fields) ...
+    model_name: str
+    ndcg: Dict[int, float]
+    map_score: float
+    precision_at_k: Dict[int, float]
+    recall_at_k: Dict[int, float]
+    f1_at_k: Dict[int, float]
 
 # --- API Endpoints ---
 
@@ -448,49 +457,7 @@ async def optimize_query(dataset_name: str, request: OptimizationRequest):
     )
     return expanded_query
 
-@app.post("/evaluate/{dataset_name}", response_model=Dict[str, EvaluationMetrics])
-async def evaluate(dataset_name: str, request: EvaluationRequest):
-    """Runs evaluation metrics for all models on the specified dataset."""
-    dataset_info = global_datasets_cache.get(dataset_name)
-    if not dataset_info:
-        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found.")
-    
-    if not dataset_info.queries or not dataset_info.qrels:
-        raise HTTPException(status_code=400, detail="Queries or Qrels data not loaded for this dataset for evaluation.")
-
-    models_to_evaluate = {
-        'TF-IDF': dataset_info.vsm_model,
-        'BERT': dataset_info.bert_model,
-        'Hybrid': dataset_info.hybrid_model
-    }
-    
-    queries_for_eval = {q.query_id: q for q in dataset_info.queries} 
-
-    qrels_for_eval = defaultdict(dict)
-    for qrel_item in dataset_info.qrels:
-        qrels_for_eval[qrel_item.query_id][qrel_item.doc_id] = qrel_item.relevance
-    
-    print(f"Starting evaluation for dataset: {dataset_name}...")
-    evaluation_results = evaluate_models(
-        models_to_evaluate, 
-        queries_for_eval, 
-        qrels_for_eval, 
-        request.eval_k_values
-    )
-    print(f"Evaluation for dataset {dataset_name} completed.")
-
-    # Convert evaluation_results (dict of dicts/floats) to EvaluationMetrics Pydantic model
-    formatted_results = {}
-    for model_name, metrics in evaluation_results.items():
-        formatted_results[model_name] = EvaluationMetrics(
-            model_name=model_name,
-            ndcg=metrics.get('ndcg', {}),
-            map_score=metrics.get('map', 0.0), # Assuming 'map' is the key for MAP score
-            precision_at_k=metrics.get('precision_at_k', {}),
-            recall_at_k=metrics.get('recall_at_k', {}),
-            f1_at_k=metrics.get('f1_at_k', {}),
-        )
-    return formatted_results
+# Remove duplicate evaluate function - it's already defined below with more features
 
 @app.get("/document/{dataset_name}/{doc_id}", response_model=FullDocumentResponse)
 async def get_document_text(dataset_name: str, doc_id: Union[int, str]):
@@ -630,6 +597,9 @@ async def search_with_clustering(dataset_name: str, request: ClusterSearchReques
     # A more efficient BERT model would pre-filter its embedding matrix.
     
     # Filter the document embeddings and corresponding raw texts for the target cluster
+    if dataset_info.bert_model.document_embeddings_matrix is None:
+        raise HTTPException(status_code=500, detail="BERT model embeddings not available for clustering search.")
+    
     cluster_embeddings_map = {
         doc_id: dataset_info.bert_model.document_embeddings_matrix[
             dataset_info.bert_model.doc_id_map[doc_id]
@@ -689,3 +659,71 @@ async def search_with_clustering(dataset_name: str, request: ClusterSearchReques
         response_results.append(SearchResult(doc_id=doc_id, score=score, text_preview=text_preview))
     
     return response_results
+
+@app.post("/evaluate/{dataset_name}", response_model=Dict[str, EvaluationMetrics])
+async def evaluate(dataset_name: str, request: EvaluationRequest):
+    """
+    Runs evaluation metrics for all models on the specified dataset, with optional clustering and PRF.
+    """
+    dataset_info = global_datasets_cache.get(dataset_name)
+    if not dataset_info:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found.")
+    
+    if not dataset_info.queries or not dataset_info.qrels:
+        raise HTTPException(status_code=400, detail="Queries or Qrels data not loaded for this dataset for evaluation.")
+
+    models_to_evaluate = {
+        'TF-IDF': dataset_info.vsm_model,
+        'BERT': dataset_info.bert_model,
+        'Hybrid': dataset_info.hybrid_model
+    }
+    
+    queries_for_eval = {q.query_id: q for q in dataset_info.queries} 
+
+    qrels_for_eval = defaultdict(dict)
+    for qrel_item in dataset_info.qrels:
+        qrels_for_eval[qrel_item.query_id][qrel_item.doc_id] = qrel_item.relevance
+    
+    print(f"Starting evaluation for dataset: {dataset_name}...")
+    print(f"Evaluation options: Clustering={request.use_clustering_for_bert_evaluation}, PRF={request.use_prf_for_evaluation}")
+    if request.use_prf_for_evaluation:
+        print(f"  PRF Initial Model: {request.prf_initial_model}, Top N Docs: {request.prf_top_n_docs}, Expansion Terms: {request.prf_num_expansion_terms}, Final Model: {request.prf_final_model or request.prf_initial_model}")
+
+    # Check if required components are available
+    if global_preprocessor is None:
+        raise HTTPException(status_code=500, detail="TextPreprocessor not initialized.")
+    if global_query_optimizer is None:
+        raise HTTPException(status_code=500, detail="QueryOptimizer not initialized.")
+
+    evaluation_results = evaluate_models(
+        models=models_to_evaluate, 
+        queries=queries_for_eval, 
+        qrels=qrels_for_eval, 
+        k_values=request.eval_k_values,
+        # Pass required components for optional features
+        raw_documents_dict=dataset_info.raw_documents_dict,
+        preprocessor=global_preprocessor, # Assuming global_preprocessor is available
+        query_optimizer=global_query_optimizer, # Assuming global_query_optimizer is available
+        document_clusterer=dataset_info.document_clusterer, # Pass the clusterer instance
+        # Pass the new options from the request
+        use_clustering_for_bert=request.use_clustering_for_bert_evaluation,
+        use_prf=request.use_prf_for_evaluation,
+        prf_initial_model_name=request.prf_initial_model,
+        prf_top_n_docs=request.prf_top_n_docs,
+        prf_num_expansion_terms=request.prf_num_expansion_terms,
+        prf_final_model_name=request.prf_final_model
+    )
+    print(f"Evaluation for dataset {dataset_name} completed.")
+
+    # Convert evaluation_results (dict of dicts/floats) to EvaluationMetrics Pydantic model
+    formatted_results = {}
+    for model_name, metrics in evaluation_results.items():
+        formatted_results[model_name] = EvaluationMetrics(
+            model_name=model_name,
+            ndcg=metrics.get('ndcg', {}),
+            map_score=metrics.get('map', 0.0), 
+            precision_at_k=metrics.get('precision_at_k', {}),
+            recall_at_k=metrics.get('recall_at_k', {}),
+            f1_at_k=metrics.get('f1_at_k', {}),
+        )
+    return formatted_results
