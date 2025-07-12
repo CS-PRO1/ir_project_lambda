@@ -45,12 +45,12 @@ class DatasetComponents:
         self.vsm_model: Optional[VectorSpaceModel] = None
         self.bert_model: Optional[BERTRetrievalModel] = None
         self.hybrid_model: Optional[HybridRanker] = None
-        self.document_clusterer: Optional[DocumentClusterer] = None
-        self.query_optimizer: Optional[QueryOptimizer] = None 
+        self.document_clusterer: Optional[DocumentClusterer] = None 
 
 # Global storage for all loaded datasets and their components
 global_datasets_cache: Dict[str, DatasetComponents] = {}
 global_preprocessor: Optional[TextPreprocessor] = None
+global_query_optimizer: Optional[QueryOptimizer] = None
 
 app = FastAPI(
     title="IR Search Engine API",
@@ -165,9 +165,10 @@ def load_or_index_bert_embeddings(dataset_name: str, raw_documents_dict: Dict[Un
 async def startup_event():
     print("--- Starting IR Search Engine Server ---")
     
-    global global_preprocessor, global_datasets_cache
+    global global_preprocessor, global_query_optimizer, global_datasets_cache
     
     global_preprocessor = TextPreprocessor(language='english')
+    global_query_optimizer = QueryOptimizer(global_preprocessor)
 
     data_loader = DataLoader(base_data_path=DATA_DIR)
     
@@ -182,13 +183,6 @@ async def startup_event():
             docs, queries, qrels = data_loader.load_antique_train()
         elif dataset_name == 'beir_webist_touche2020':
             docs, queries, qrels = data_loader.load_beir_webist_touche2020()
-        
-        print(f"Data loading results for {dataset_name}:")
-        print(f"  - Documents loaded: {docs is not None}")
-        if docs is not None:
-            print(f"  - Number of documents: {len(docs)}")
-            print(f"  - Number of queries: {len(queries) if queries else 0}")
-            print(f"  - Number of qrels: {len(qrels) if qrels else 0}")
         
         if docs is None:
             print(f"Failed to load documents for {dataset_name}. Skipping this dataset.")
@@ -226,17 +220,6 @@ async def startup_event():
             dataset_name, dataset_components.raw_documents_dict
         )
         print(f"BERT model for {dataset_name} ready with {len(dataset_components.bert_model.doc_id_map)} embeddings.")
-        
-        # Debug: Check if BERT model is properly loaded
-        if dataset_components.bert_model:
-            print(f"BERT model status:")
-            print(f"  - Model loaded: {dataset_components.bert_model.model is not None}")
-            print(f"  - Embeddings matrix: {dataset_components.bert_model.document_embeddings_matrix is not None}")
-            if dataset_components.bert_model.document_embeddings_matrix is not None:
-                print(f"  - Embeddings shape: {dataset_components.bert_model.document_embeddings_matrix.shape}")
-            print(f"  - Doc ID map size: {len(dataset_components.bert_model.doc_id_map)}")
-        else:
-            print(f"Warning: BERT model is None for {dataset_name}")
 
         N_CLUSTERS = 5 # Example: 10 clusters
         USE_PCA_FOR_CLUSTERING = True
@@ -280,14 +263,6 @@ async def startup_event():
             dataset_components.inverted_index, global_preprocessor, dataset_components.bert_model
         )
         print(f"Hybrid Ranker for {dataset_name} ready.")
-
-        # Initialize QueryOptimizer for this dataset
-        dataset_components.query_optimizer = QueryOptimizer(
-            dataset_components.inverted_index,
-            dataset_components.vsm_model,
-            dataset_components.bert_model
-        )
-        print(f"QueryOptimizer for {dataset_name} ready.")
 
         global_datasets_cache[dataset_name] = dataset_components
         print(f"Dataset '{dataset_name}' fully loaded and models initialized.")
@@ -414,16 +389,6 @@ async def search(dataset_name: str, model_type: str, request: SearchRequest):
     elif model_type.lower() == 'bert':
         if not dataset_info.bert_model:
             raise HTTPException(status_code=500, detail="BERT model not initialized for this dataset.")
-        
-        # Debug: Check BERT model status before search
-        print(f"BERT model debug info:")
-        print(f"  - Model object exists: {dataset_info.bert_model is not None}")
-        print(f"  - Model loaded: {dataset_info.bert_model.model is not None}")
-        print(f"  - Embeddings matrix exists: {dataset_info.bert_model.document_embeddings_matrix is not None}")
-        if dataset_info.bert_model.document_embeddings_matrix is not None:
-            print(f"  - Embeddings shape: {dataset_info.bert_model.document_embeddings_matrix.shape}")
-        print(f"  - Doc ID map size: {len(dataset_info.bert_model.doc_id_map)}")
-        
         results = dataset_info.bert_model.search(processed_query, top_k=request.top_k) # Use processed_query
     elif model_type.lower() == 'hybrid':
         if not dataset_info.hybrid_model:
@@ -465,8 +430,8 @@ async def optimize_query(dataset_name: str, request: OptimizationRequest):
     if not dataset_info:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_name}' not found.")
     
-    if not dataset_info.query_optimizer:
-        raise HTTPException(status_code=500, detail="Query Optimizer not initialized for this dataset.")
+    if not global_query_optimizer:
+        raise HTTPException(status_code=500, detail="Query Optimizer not initialized.")
 
     retrieval_model_for_prf = None
     if request.initial_search_model.lower() == 'tf-idf':
@@ -482,7 +447,7 @@ async def optimize_query(dataset_name: str, request: OptimizationRequest):
     # Note: This endpoint for PRF does NOT apply spell correction implicitly.
     # Spell correction should be applied before calling this if desired,
     # or use the /search/{dataset_name}/{model_type} endpoint with apply_spell_correction=True
-    expanded_query = dataset_info.query_optimizer.expand_query_with_prf(
+    expanded_query = global_query_optimizer.expand_query_with_prf(
         original_query=request.query,
         retrieval_model=retrieval_model_for_prf,
         raw_documents_dict=dataset_info.raw_documents_dict,
@@ -726,8 +691,8 @@ async def evaluate(dataset_name: str, request: EvaluationRequest):
     # Check if required components are available
     if global_preprocessor is None:
         raise HTTPException(status_code=500, detail="TextPreprocessor not initialized.")
-    if dataset_info.query_optimizer is None:
-        raise HTTPException(status_code=500, detail="QueryOptimizer not initialized for this dataset.")
+    if global_query_optimizer is None:
+        raise HTTPException(status_code=500, detail="QueryOptimizer not initialized.")
 
     evaluation_results = evaluate_models(
         models=models_to_evaluate, 
@@ -737,7 +702,7 @@ async def evaluate(dataset_name: str, request: EvaluationRequest):
         # Pass required components for optional features
         raw_documents_dict=dataset_info.raw_documents_dict,
         preprocessor=global_preprocessor,
-        query_optimizer=dataset_info.query_optimizer,
+        query_optimizer=global_query_optimizer,
         document_clusterer=dataset_info.document_clusterer, # Pass the clusterer instance
         # Pass the new options from the request
         use_clustering_for_bert=request.use_clustering_for_bert_evaluation,
