@@ -43,6 +43,10 @@ env/
 .project
 .directory
 *.jsonl
+*.json
+*.pkl
+*.npy
+
 # Operating System Files
 .DS_Store           # macOS
 Thumbs.db           # Windows
@@ -61,6 +65,9 @@ ehthumbs.db
 # Assumes your datasets are within 'data/antique_train/' and 'data/beir_webist_touche2020/'
 data/antique_train/
 data/beir_webist_touche2020/
+
+ir_search_engine/data/
+ir_search_engine/data/indexes/antique_train_inverted_index.json
 
 # --- Indexes and Embeddings ---
 # Ignore the entire 'indexes' directory as requested.

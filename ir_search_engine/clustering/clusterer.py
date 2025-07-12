@@ -13,19 +13,13 @@ class DocumentClusterer:
         self.n_clusters = n_clusters
         self.random_state = random_state
         self.kmeans_model = None
-        self.document_clusters = {} # {doc_id: cluster_id}
+        self.document_clusters = {}
         self.cluster_centroids = None
         self.use_pca = use_pca
         self.pca = None
         self.pca_components = pca_components
 
     def cluster_documents(self, doc_embeddings, doc_ids):
-        """
-        Clusters documents based on their embeddings.
-        Args:
-            doc_embeddings (np.array): NxM numpy array of document embeddings.
-            doc_ids (list): List of document IDs corresponding to the embeddings.
-        """
         print(f"Clustering documents into {self.n_clusters} clusters...")
 
         data_to_cluster = doc_embeddings
@@ -35,19 +29,12 @@ class DocumentClusterer:
             data_to_cluster = self.pca.fit_transform(doc_embeddings)
             print(f"PCA explained variance ratio: {np.sum(self.pca.explained_variance_ratio_):.2f}")
 
-        self.kmeans_model = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init=10) # n_init for robustness
+        self.kmeans_model = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init=10)
         cluster_labels = self.kmeans_model.fit_predict(data_to_cluster)
         self.cluster_centroids = self.kmeans_model.cluster_centers_
 
         self.document_clusters = {doc_id: label for doc_id, label in zip(doc_ids, cluster_labels)}
         print("Document clustering complete.")
-
-        # Evaluate clustering (optional, for insights)
-        # try:
-        #     silhouette_avg = silhouette_score(data_to_cluster, cluster_labels)
-        #     print(f"Silhouette Score: {silhouette_avg:.3f} (higher is better, typically between -1 and 1)")
-        # except Exception as e:
-        #     print(f"Could not calculate Silhouette Score (requires >= 2 clusters and > n_samples): {e}")
 
         return self.document_clusters
 
@@ -58,12 +45,11 @@ class DocumentClusterer:
         return [doc_id for doc_id, label in self.document_clusters.items() if label == cluster_id]
 
     def find_nearest_cluster(self, query_embedding):
-        """Finds the closest cluster centroid to a given query embedding."""
         if self.kmeans_model is None:
             raise ValueError("Clustering model not trained. Call cluster_documents first.")
         
         query_data = query_embedding
-        if self.pca: # Apply same PCA transformation if used during clustering
+        if self.pca:
             query_data = self.pca.transform(query_embedding)
         
         distances = np.linalg.norm(self.cluster_centroids - query_data, axis=1)
@@ -71,25 +57,20 @@ class DocumentClusterer:
         return nearest_cluster_id
 
     def save_clusterer(self, filepath):
-        """Saves the clusterer model to a file."""
-        print(f"  Attempting to save clusterer to {filepath}...")
+        print(f"Saving clusterer to {filepath}...")
         start_time_save = time.time()
         try:
             with open(filepath, 'wb') as f:
-                start_time_dump = time.time()
                 pickle.dump((self.kmeans_model, self.document_clusters, self.cluster_centroids, self.pca), f)
-                print(f"  pickle.dump operation took {time.time() - start_time_dump:.2f} seconds.")
-            print(f"Clusterer saved to {filepath} in {time.time() - start_time_save:.2f} seconds.")
-            return True # Indicate successful save
+            print(f"Clusterer saved in {time.time() - start_time_save:.2f} seconds.")
+            return True
         except Exception as e:
-            print(f"Error saving clusterer to {filepath}: {e}")
-            # Optionally, remove incomplete file
+            print(f"Error saving clusterer: {e}")
             if os.path.exists(filepath):
                 os.remove(filepath)
-            return False # Indicate failed save
+            return False
     
     def load_clusterer(self, filepath):
-        """Loads the clusterer model from a file."""
         if not os.path.exists(filepath):
             print(f"Clusterer file not found at {filepath}")
             return False
@@ -99,8 +80,7 @@ class DocumentClusterer:
             print(f"Clusterer loaded from {filepath}")
             return True
         except Exception as e:
-            print(f"Error loading clusterer from {filepath}: {e}. File might be corrupted.")
-            # Optionally, remove corrupted file
+            print(f"Error loading clusterer: {e}")
             if os.path.exists(filepath):
                 os.remove(filepath)
             return False

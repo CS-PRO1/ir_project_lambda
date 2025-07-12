@@ -4,40 +4,61 @@ A comprehensive Information Retrieval (IR) search engine system with multiple re
 
 ## 🏗️ System Architecture
 
+### Modular Design
+
+The system is organized into clean, modular components for better maintainability and scalability:
+
+#### 📁 **Core Application** (`core/`)
+- **`server.py`** - FastAPI backend server with all API endpoints
+- **`client_app.py`** - Streamlit frontend application  
+- **`main.py`** - Command-line interface for the search engine
+
+#### 📁 **Data Processing** (`data_processing/`)
+- **`data_loader.py`** - Downloads and manages datasets from `ir_datasets`
+- **`preprocessing.py`** - Text preprocessing, tokenization, spell checking
+
+#### 📁 **Retrieval Models** (`retrieval_models/`)
+- **`indexer.py`** - Inverted index construction for fast retrieval
+- **`retrieval_model.py`** - Vector Space Model (TF-IDF) implementation
+- **`bert_retrieval.py`** - BERT-based semantic search model
+- **`hybrid_retrieval.py`** - Hybrid ranking combining TF-IDF and BERT
+
+#### 📁 **Query Processing** (`query_processing/`)
+- **`query_optimizer.py`** - Pseudo-Relevance Feedback (PRF) for query expansion
+
+#### 📁 **Evaluation** (`evaluation/`)
+- **`evaluator.py`** - Comprehensive IR metrics (MAP, Recall, Precision@10, MRR)
+
+#### 📁 **Clustering** (`clustering/`)
+- **`clusterer.py`** - K-means clustering with PCA dimensionality reduction
+
 ### Core Components
 
-The system consists of several interconnected modules:
-
-1. **Data Loading & Management** (`data_loader.py`)
-   - Downloads and manages datasets from `ir_datasets`
+1. **Data Loading & Management**
    - Supports `antique_train` and `beir_webist_touche2020` datasets
    - Handles documents, queries, and relevance judgments
+   - Automatic dataset caching for faster subsequent runs
 
-2. **Text Preprocessing** (`preprocessing.py`)
+2. **Text Preprocessing**
    - Text cleaning and normalization
    - Tokenization and stop word removal
    - Stemming and lemmatization
    - N-gram generation
    - Spell correction using `pyspellchecker`
 
-3. **Indexing System** (`indexer.py`)
-   - Inverted index construction for fast retrieval
-   - TF-IDF weighting
-   - Efficient document lookup
+3. **Retrieval Models**
+   - **Vector Space Model (VSM)**: Traditional TF-IDF based retrieval
+   - **BERT Model**: Semantic search using BERT embeddings
+   - **Hybrid Model**: Combines VSM and BERT for enhanced performance
 
-4. **Retrieval Models**
-   - **Vector Space Model (VSM)** (`retrieval_model.py`): Traditional TF-IDF based retrieval
-   - **BERT Model** (`bert_retrieval.py`): Semantic search using BERT embeddings
-   - **Hybrid Model** (`hybrid_retrieval.py`): Combines VSM and BERT for enhanced performance
+4. **Advanced Features**
+   - **Document Clustering**: Groups similar documents using K-means
+   - **Query Optimization**: Pseudo-Relevance Feedback (PRF) for query expansion
+   - **Evaluation**: Comprehensive IR metrics (MAP, Recall, Precision@10, MRR)
 
-5. **Advanced Features**
-   - **Document Clustering** (`clusterer.py`): Groups similar documents using K-means
-   - **Query Optimization** (`query_optimizer.py`): Pseudo-Relevance Feedback (PRF) for query expansion
-   - **Evaluation** (`evaluator.py`): Comprehensive IR metrics (MAP, Recall, Precision@10, MRR)
-
-6. **Web Interface**
-   - **FastAPI Backend** (`server.py`): RESTful API for all operations
-   - **Streamlit Frontend** (`client_app.py`): User-friendly web interface
+5. **Web Interface**
+   - **FastAPI Backend**: RESTful API for all operations
+   - **Streamlit Frontend**: User-friendly web interface
 
 ### How It Works
 
@@ -59,15 +80,15 @@ The system consists of several interconnected modules:
 ### Step-by-Step Installation
 
 1. **Clone the Repository**
-   ```bash
+    ```bash
    git clone <repository-url>
    cd ir_project_lambda
-   ```
+    ```
 
 2. **Create Virtual Environment**
-   ```bash
+    ```bash
    # On Windows
-   python -m venv venv
+    python -m venv venv
    .venv\Scripts\activate
 
    # On macOS/Linux
@@ -76,9 +97,9 @@ The system consists of several interconnected modules:
    ```
 
 3. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+    ```bash
+    pip install -r requirements.txt
+    ```
 
 4. **Download Required Data**
    ```bash
@@ -88,12 +109,31 @@ The system consists of several interconnected modules:
 
 ## 🏃‍♂️ Running the System
 
-### Option 1: Web Interface (Recommended)
+### Option 1: PowerShell Scripts (Windows - Recommended)
+
+For Windows users, we provide convenient PowerShell scripts:
+
+1. **Start Server Only**
+   ```powershell
+   .\start_server.ps1
+   ```
+
+2. **Start UI Only** (requires server to be running)
+   ```powershell
+   .\start_ui.ps1
+   ```
+
+3. **Start Both Components** (opens separate windows)
+   ```powershell
+   .\start_all.ps1
+   ```
+
+### Option 2: Manual Commands
 
 1. **Start the Backend Server**
    ```bash
    # Make sure your virtual environment is activated
-   uvicorn ir_search_engine.server:app --host 127.0.0.1 --port 8000 --reload
+   uvicorn ir_search_engine.core.server:app --host 127.0.0.1 --port 8000 --reload
    ```
    The server will:
    - Load and preprocess datasets
@@ -105,7 +145,7 @@ The system consists of several interconnected modules:
 2. **Start the Streamlit Frontend**
    ```bash
    # In a new terminal (with virtual environment activated)
-   streamlit run ir_search_engine/client_app.py
+   streamlit run ir_search_engine.core.client_app
    ```
 
 3. **Access the Web Interface**
@@ -116,7 +156,7 @@ The system consists of several interconnected modules:
 
 1. **Run the Main Script**
    ```bash
-   python ir_search_engine/main.py
+   python -m ir_search_engine.core.main
    ```
 
 2. **Follow the Interactive Prompts**
@@ -174,20 +214,35 @@ ir_project_lambda/
 │   ├── beir_webis-touche2020/    # WebIS dataset
 │   └── indexes/                   # Cached indexes and embeddings
 ├── ir_search_engine/
-│   ├── server.py                  # FastAPI backend
-│   ├── client_app.py              # Streamlit frontend
-│   ├── main.py                    # CLI entry point
-│   ├── data_loader.py             # Dataset management
-│   ├── preprocessing.py            # Text preprocessing
-│   ├── indexer.py                 # Inverted index
-│   ├── retrieval_model.py         # VSM implementation
-│   ├── bert_retrieval.py          # BERT model
-│   ├── hybrid_retrieval.py        # Hybrid model
-│   ├── clusterer.py               # Document clustering
-│   ├── query_optimizer.py         # Query optimization
-│   ├── evaluator.py               # Evaluation metrics
-│   └── __init__.py
+│   ├── core/                      # Application core
+│   │   ├── server.py              # FastAPI backend
+│   │   ├── client_app.py          # Streamlit frontend
+│   │   ├── main.py                # CLI entry point
+│   │   └── __init__.py
+│   ├── data_processing/           # Data loading and preprocessing
+│   │   ├── data_loader.py         # Dataset management
+│   │   ├── preprocessing.py       # Text preprocessing
+│   │   └── __init__.py
+│   ├── retrieval_models/          # Search and retrieval models
+│   │   ├── indexer.py             # Inverted index
+│   │   ├── retrieval_model.py     # VSM implementation
+│   │   ├── bert_retrieval.py      # BERT model
+│   │   ├── hybrid_retrieval.py    # Hybrid model
+│   │   └── __init__.py
+│   ├── query_processing/          # Query optimization
+│   │   ├── query_optimizer.py     # PRF implementation
+│   │   └── __init__.py
+│   ├── evaluation/                # Performance evaluation
+│   │   ├── evaluator.py           # Evaluation metrics
+│   │   └── __init__.py
+│   ├── clustering/                # Document clustering
+│   │   ├── clusterer.py           # K-means clustering
+│   │   └── __init__.py
+│   └── __init__.py               # Main package exports
 ├── requirements.txt               # Python dependencies
+├── start_server.ps1              # PowerShell script to start server
+├── start_ui.ps1                  # PowerShell script to start UI
+├── start_all.ps1                 # PowerShell script to start both
 └── README.md                     # This file
 ```
 
@@ -218,10 +273,24 @@ ir_project_lambda/
 - **Memory Usage**: Close other applications if experiencing memory issues
 - **Network**: Ensure stable internet for initial dataset downloads
 
+## 📚 Module Usage Examples
+
+```python
+# Import main application components
+from ir_search_engine import app, main
+
+# Import data processing components
+from ir_search_engine import DataLoader, TextPreprocessor
+
+# Import retrieval models
+from ir_search_engine import VectorSpaceModel, BERTRetrievalModel, HybridRanker
+
+# Import evaluation and clustering
+from ir_search_engine import evaluate_models, DocumentClusterer
+```
 
 ## 🙏 Acknowledgments
 
 - Built with FastAPI, Streamlit, and Transformers
 - Uses datasets from `ir_datasets`
-- Implements standard IR evaluation metrics
-- Inspired by modern information retrieval research
+- Modular architecture for easy maintenance and extension
